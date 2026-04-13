@@ -6,6 +6,8 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 import math
 import argparse
+import random
+import numpy as np
 
 # 导入 25 维双脑模型
 from src.model import Model
@@ -45,9 +47,15 @@ def custom_collate(batch):
 # ==========================================
 # 3. 主训练逻辑
 # ==========================================
-def train(config_path):
+def train(config_path, seed=1234):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"🚀 启动 L2Seg 训练流程，使用设备: {device}")
+
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
     # --- 读取 YAML 配置 ---
     with open(config_path, 'r', encoding='utf-8') as f:
@@ -145,5 +153,6 @@ def train(config_path):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str, default='configs/train/cvrp100.yaml')
+    parser.add_argument('--seed', type=int, default=1234)
     args = parser.parse_args()
-    train(args.config)
+    train(args.config, seed=args.seed)

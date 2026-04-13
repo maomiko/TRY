@@ -2,6 +2,8 @@ import argparse
 import yaml
 import os
 import torch
+import random
+import numpy as np
 from src.search_sa import Search
 
 def load_config(yaml_path):
@@ -14,6 +16,7 @@ def main():
     parser = argparse.ArgumentParser(description="L2Seg 25-Dim Evaluation & Data Collection Entry")
     # 允许通过命令行指定配置文件
     parser.add_argument('--config', type=str, default='configs/eval/cvrp100.yaml', help='Path to yaml config file')
+    parser.add_argument('--seed', type=int, default=1234, help='Random seed for reproducibility')
     args = parser.parse_args()
 
     print(f"🚀 [1/3] 加载驱动配置: {args.config}")
@@ -25,6 +28,14 @@ def main():
     config = load_config(args.config)
     env_params = config.get("env_params", {})
     tester_params = config.get("tester_params", {})
+
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
+
+    tester_params.setdefault("seed", args.seed)
 
     # ==========================================
     # 👑 动态防御逻辑 (同步 dry_run 的成功经验)
