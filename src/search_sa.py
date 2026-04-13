@@ -29,6 +29,8 @@ from .label_generator import L2SegLabelGenerator
 
 from .fsta_core import FSTA_Compressor
 
+SEED_MIXING_PRIME = 1000003
+
 
 class MockProblemFeat:
     def __init__(self, depot_xy, node_xy, node_demand):
@@ -233,6 +235,7 @@ class Search:
 
         deterministic = self.tester_params.get("deterministic", True)
         if deterministic and num_processes > 1:
+            # Deterministic replay requires a fixed execution order, so disable multi-process mode.
             self.logger.info("Deterministic mode enabled, forcing single-process execution.")
             num_processes = 1
 
@@ -294,7 +297,10 @@ class Search:
 
         filename = cfg.get("filename")
         if filename is None:
-            raise ValueError("tester_params.test_data_load.filename is required when test_data_load.enable=True")
+            raise ValueError(
+                "tester_params.test_data_load.filename must be specified when "
+                "test_data_load.enable=True. Please provide a valid dataset file path."
+            )
         if not os.path.exists(filename):
             raise FileNotFoundError(f"Test dataset file not found: {filename}")
 
@@ -417,7 +423,7 @@ class Search:
         incumbent_solution = None
 
         # Simulated Annealing loop
-        local_seed = (self.seed * 1000003 + int(instance_idx)) & 0xFFFFFFFF
+        local_seed = (self.seed * SEED_MIXING_PRIME + int(instance_idx)) & 0xFFFFFFFF
         local_rng = random.Random(local_seed)
         iteration = 0
         while iteration < max_iterations:
