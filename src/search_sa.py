@@ -232,7 +232,7 @@ class Search:
         self.logger.info(f" 多核模式: {num_processes} 个 CPU 核心")
         self.logger.info("=" * 80)
 
-        deterministic = self.tester_params.get("deterministic", True)
+        deterministic = self.tester_params.get("deterministic", False)
         if deterministic and num_processes > 1:
             # Deterministic replay requires a fixed execution order, so disable multi-process mode.
             self.logger.info("Deterministic mode enabled, forcing single-process execution.")
@@ -296,10 +296,7 @@ class Search:
 
         filename = cfg.get("filename")
         if filename is None:
-            raise ValueError(
-                "tester_params.test_data_load.filename must be specified when "
-                "test_data_load.enable=True. Please provide a valid dataset file path."
-            )
+            raise ValueError("tester_params.test_data_load.filename is required when test_data_load.enable=True")
         if not os.path.exists(filename):
             raise FileNotFoundError(f"Test dataset file not found: {filename}")
 
