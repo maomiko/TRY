@@ -283,8 +283,14 @@ class Search:
         if not self.training_data_buffer:
             self.logger.info("未收集到任何有效的标签数据。")
             return
-            
-        save_path = os.path.join(self.result_folder, "l2seg_training_data.pt")
+
+        save_path = self.tester_params.get(
+            "l2s_data_save_path",
+            os.path.join(self.result_folder, "l2seg_training_data.pt"),
+        )
+        save_dir = os.path.dirname(save_path)
+        if save_dir:
+            os.makedirs(save_dir, exist_ok=True)
         torch.save(self.training_data_buffer, save_path)
         self.logger.info(f"成功保存 {len(self.training_data_buffer)} 条训练数据至 {save_path}")
 
@@ -741,9 +747,9 @@ class Search:
         
         # 直接使用传入的 reset_state，保护 SA 现场不被破坏！
 
-        # 论文推荐的超参数
-        eta = 0.6            # NAR 判定不稳定的阈值
-        n_kmeans = 3         # 聚类簇的数量
+        # 论文推荐超参数（支持通过 tester_params 覆盖）
+        eta = float(self.tester_params.get("nar_threshold", 0.6))
+        n_kmeans = int(self.tester_params.get("n_kmeans", 3))
         
         with torch.no_grad():
 
@@ -784,7 +790,7 @@ class Search:
             
             # 防止候选点数量比预设的 K 还少
             actual_k = min(n_kmeans, len(unstable_candidates))
-            kmeans = KMeans(n_clusters=actual_k, random_state=42, n_init='auto')
+            kmeans = KMeans(n_clusters=actual_k, random_state=self.seed, n_init='auto')
             cluster_labels = kmeans.fit_predict(candidate_coords)
             
             initial_nodes = []

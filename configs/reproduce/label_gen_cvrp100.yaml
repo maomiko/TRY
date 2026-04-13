@@ -1,0 +1,63 @@
+paper_reference:
+  source_pdf: "/home/runner/work/TRY/TRY/2507.01037v2.pdf"
+  target: "L2Seg CVRP复现实验（仓库实现版）"
+  success_criteria:
+    - "成功生成 results/l2seg_dataset/l2seg_training_data.pt"
+    - "训练后可加载 checkpoint 并完成 AI 模式推理"
+    - "输出平均 cost/runtime 并与 baseline 对齐比较"
+
+env_params:
+  problem: "cvrp"
+  problem_size: 100
+  num_processes: 1
+  num_nodes_to_remove: 15
+  beta: 0.0
+  insert_in_new_tours_only: true
+  recreate_n: 5
+  max_vehicles: 50
+
+model_params:
+  problem: "cvrp"
+  problem_size: 100
+  embedding_dim: 128
+  encoder_layer_num: 3
+  head_num: 8
+  qkv_dim: 16
+  decoder_layer_num: 4
+  ff_hidden_dim: 512
+  tour_layer: true
+  message_passing_layer_num: 3
+  encoder_layer_num_2: 3
+  poly_embedding_dim: 128
+  z_dim: 16
+  sqrt_embedding_dim: 11.31
+  logit_clipping: 10.0
+  eval_type: "argmax"
+
+tester_params:
+  seed: 1234
+  deterministic: true
+  use_cuda: false
+  cuda_device_num: 0
+  use_baseline_destroy: true
+  model_load: []
+  l2s_data_save_path: "results/l2seg_dataset/l2seg_training_data.pt"
+  nar_threshold: 0.6
+  n_kmeans: 3
+
+  # 论文 D.3: TIS=40（本仓库直接映射到 nb_iterations）
+  nb_instances: 1000
+  nb_iterations: 40
+  rollout_size: 40
+  aug_factor: 1
+  max_runtime: 0
+
+  SA_start_T: 100
+  SA_final_T: 1
+  SA_delta: 0.1
+  softmax_temp: 1.0
+
+  test_data_load:
+    enable: true
+    use_pkl_file: true
+    filename: "data/cvrp/vrp1000_test_seed1234.pkl"
