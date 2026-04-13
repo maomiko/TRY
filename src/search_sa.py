@@ -122,7 +122,12 @@ class Search:
         self.device = self._setup_device()
 
         # Reproducibility
-        self.seed = int(self.tester_params.get("seed", self.env_params.get("seed", 1234)))
+        if "seed" in self.tester_params:
+            self.seed = int(self.tester_params["seed"])
+        elif "seed" in self.env_params:
+            self.seed = int(self.env_params["seed"])
+        else:
+            self.seed = 1234
         random.seed(self.seed)
         np.random.seed(self.seed)
         torch.manual_seed(self.seed)
@@ -299,7 +304,7 @@ class Search:
                 self.test_dataset = pickle.load(f)
             self.test_dataset_size = len(self.test_dataset)
         else:
-            loaded = torch.load(filename, map_location="cpu", weights_only=False)
+            loaded = torch.load(filename, map_location="cpu", weights_only=True)
             required = {"depot_xy", "node_xy", "node_demand", "capacity"}
             if not isinstance(loaded, dict) or not required.issubset(set(loaded.keys())):
                 raise ValueError(f"Unsupported dataset format in {filename}; required keys: {sorted(required)}")
@@ -412,7 +417,8 @@ class Search:
         incumbent_solution = None
 
         # Simulated Annealing loop
-        local_rng = random.Random(self.seed + int(instance_idx))
+        local_seed = (self.seed * 1000003 + int(instance_idx)) & 0xFFFFFFFF
+        local_rng = random.Random(local_seed)
         iteration = 0
         while iteration < max_iterations:
             
