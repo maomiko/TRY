@@ -1,6 +1,6 @@
 paper_reference:
-  source_pdf: "/home/runner/work/TRY/TRY/2507.01037v2.pdf"
-  note: "论文 D.3 推荐: eta=0.6, nKMEANS=3"
+  source_pdf: "2507.01037v2.pdf"
+  note: "论文 D.3 推荐: eta=0.6, n_kmeans=3"
 
 env_params:
   problem: "cvrp"

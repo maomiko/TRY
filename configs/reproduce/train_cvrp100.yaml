@@ -1,5 +1,5 @@
 paper_reference:
-  source_pdf: "/home/runner/work/TRY/TRY/2507.01037v2.pdf"
+  source_pdf: "2507.01037v2.pdf"
   note: "论文 D.3 推荐: 200 epochs, ADAM, 小规模 CVRP 学习率 1e-4"
 
 env_params:
@@ -25,7 +25,7 @@ model_params:
   encoder_layer_num_2: 3
   poly_embedding_dim: 128
   z_dim: 16
-  sqrt_embedding_dim: 11.31
+  sqrt_embedding_dim: 11.31  # 论文配置近似值（sqrt(128)≈11.3137）
   logit_clipping: 10.0
   eval_type: "argmax"
 
@@ -41,6 +41,7 @@ trainer_params:
   num_workers: 0
 
   grad_clip_norm: 1.0
-  nar_loss_weight: 9.0
+  nar_loss_weight: 1.0
+  nar_pos_weight: 9.0
   ar_loss_weight: 1.0
   checkpoint_every: 1

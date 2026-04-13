@@ -1,6 +1,6 @@
 # L2Seg 论文复现（仓库实现版，CVRP100）
 
-论文：`/home/runner/work/TRY/TRY/2507.01037v2.pdf`
+论文：`2507.01037v2.pdf`
 
 ## 1) 复现目标与成功标准
 
@@ -16,7 +16,7 @@
 基于论文附录 D.3 / D.4，已在复现配置中对齐以下关键参数：
 
 - `η (NAR threshold) = 0.6`
-- `nKMEANS = 3`
+- `n_kmeans = 3`
 - 训练数据生成迭代步：`TIS = 40`（在本仓库映射为 `nb_iterations=40`）
 - 训练优化器：`ADAM`
 - 小规模 CVRP 学习率：`1e-4`
@@ -29,7 +29,7 @@
 ### 阶段 A：专家模式生成监督数据
 
 ```bash
-python /home/runner/work/TRY/TRY/eval.py --config /home/runner/work/TRY/TRY/configs/reproduce/label_gen_cvrp100.yaml --seed 1234
+python eval.py --config configs/reproduce/label_gen_cvrp100.yaml --seed 1234
 ```
 
 期望输出：
@@ -39,7 +39,7 @@ python /home/runner/work/TRY/TRY/eval.py --config /home/runner/work/TRY/TRY/conf
 ### 阶段 B：训练 L2Seg 模型
 
 ```bash
-python /home/runner/work/TRY/TRY/train.py --config /home/runner/work/TRY/TRY/configs/reproduce/train_cvrp100.yaml --seed 1234
+python train.py --config configs/reproduce/train_cvrp100.yaml --seed 1234
 ```
 
 期望输出：
@@ -50,7 +50,7 @@ python /home/runner/work/TRY/TRY/train.py --config /home/runner/work/TRY/TRY/con
 ### 阶段 C：AI 模式推理评测
 
 ```bash
-python /home/runner/work/TRY/TRY/eval.py --config /home/runner/work/TRY/TRY/configs/reproduce/eval_ai_cvrp100.yaml --seed 1234
+python eval.py --config configs/reproduce/eval_ai_cvrp100.yaml --seed 1234
 ```
 
 期望输出：
@@ -80,4 +80,3 @@ python /home/runner/work/TRY/TRY/eval.py --config /home/runner/work/TRY/TRY/conf
    - `eval_ai_cvrp100.yaml`
 2. 训练入口 `train.py` 配置化，去除关键硬编码（数据路径、epoch、lr、checkpoint 路径、loss 权重等）
 3. `search_sa.py` 支持通过配置覆盖 `nar_threshold` 和 `n_kmeans`，并支持自定义训练数据保存路径
-

@@ -48,6 +48,10 @@ def custom_collate(batch):
 
 def _read_trainer_params(config):
     trainer_params = config.get("trainer_params", {})
+    nar_pos_weight = trainer_params.get("nar_pos_weight", None)
+    if nar_pos_weight is None:
+        # 向后兼容：旧配置若只设置 nar_loss_weight，则沿用为 pos_weight
+        nar_pos_weight = float(trainer_params.get("nar_loss_weight", 1.0))
     return {
         "epochs": int(trainer_params.get("epochs", 20)),
         "learning_rate": float(trainer_params.get("learning_rate", 1e-4)),
@@ -56,6 +60,7 @@ def _read_trainer_params(config):
         "num_workers": int(trainer_params.get("num_workers", 0)),
         "grad_clip_norm": float(trainer_params.get("grad_clip_norm", 1.0)),
         "nar_loss_weight": float(trainer_params.get("nar_loss_weight", 1.0)),
+        "nar_pos_weight": float(nar_pos_weight),
         "ar_loss_weight": float(trainer_params.get("ar_loss_weight", 1.0)),
         "train_data_path": trainer_params.get("train_data_path", "results/l2seg_dataset/l2seg_training_data.pt"),
         "checkpoint_dir": trainer_params.get("checkpoint_dir", "results/l2seg_dataset/checkpoints"),
@@ -93,7 +98,7 @@ def train(config_path, seed=1234):
     model.train()
 
     optimizer = optim.Adam(model.parameters(), lr=trainer_params["learning_rate"])
-    nar_pos_weight = torch.tensor([trainer_params["nar_loss_weight"]], device=device)
+    nar_pos_weight = torch.tensor([trainer_params["nar_pos_weight"]], device=device)
     nar_criterion = nn.BCEWithLogitsLoss(pos_weight=nar_pos_weight)
     ar_criterion = nn.CrossEntropyLoss(ignore_index=model.PAD_TOKEN)
 
@@ -117,15 +122,18 @@ def train(config_path, seed=1234):
     if not os.path.exists(trainer_params["metrics_csv"]):
         with open(trainer_params["metrics_csv"], "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
-            writer.writerow(["epoch", "loss", "loss_nar", "loss_ar"])
+            writer.writerow(["epoch", "weighted_total_loss", "unweighted_loss_nar", "unweighted_loss_ar"])
 
     for epoch in range(epochs):
         total_loss, total_nar, total_ar, sample_count = 0.0, 0.0, 0.0, 0
+        skipped_short_sequences = 0
+        padded_nar_labels = 0
+        truncated_nar_labels = 0
         
         for batch_idx, batch in enumerate(dataloader):
             optimizer.zero_grad()
-            batch_loss = 0.0
             valid_items = 0
+            losses = []
 
             for sample in batch:
                 state_dict = sample["state_dict"]
@@ -157,15 +165,21 @@ def train(config_path, seed=1234):
                 # 1. NAR 损失
                 nar_logits = model.nar_forward()
                 # 自动对齐标签长度 (防御切片导致的维度不一)
+                aligned_nar_labels = nar_labels
                 if nar_labels.shape[1] < nar_logits.shape[1]:
-                    nar_labels = torch.cat(
+                    aligned_nar_labels = torch.cat(
                         [nar_labels, torch.zeros(1, nar_logits.shape[1] - nar_labels.shape[1], device=device)],
                         dim=1
                     )
-                loss_nar = nar_criterion(nar_logits, nar_labels[:, :nar_logits.shape[1]])
+                    padded_nar_labels += 1
+                elif nar_labels.shape[1] > nar_logits.shape[1]:
+                    aligned_nar_labels = nar_labels[:, :nar_logits.shape[1]]
+                    truncated_nar_labels += 1
+                loss_nar = nar_criterion(nar_logits, aligned_nar_labels)
 
                 # 2. AR 损失 (Teacher Forcing)
                 if ar_sequences.shape[1] < 2:
+                    skipped_short_sequences += 1
                     continue
                 ar_input = ar_sequences[:, :-1]
                 ar_target = ar_sequences[:, 1:]
@@ -173,9 +187,9 @@ def train(config_path, seed=1234):
                 loss_ar = ar_criterion(ar_logits.reshape(-1, model.vocab_size), ar_target.reshape(-1))
 
                 # --- 汇总损失 ---
-                loss = loss_nar + trainer_params["ar_loss_weight"] * loss_ar
-                batch_loss = batch_loss + loss
+                loss = trainer_params["nar_loss_weight"] * loss_nar + trainer_params["ar_loss_weight"] * loss_ar
                 valid_items += 1
+                losses.append(loss)
 
                 total_loss += loss.item()
                 total_nar += loss_nar.item()
@@ -185,7 +199,8 @@ def train(config_path, seed=1234):
             if valid_items == 0:
                 continue
 
-            (batch_loss / valid_items).backward()
+            batch_loss = torch.stack(losses).mean()
+            batch_loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=trainer_params["grad_clip_norm"])
             optimizer.step()
 
@@ -197,6 +212,12 @@ def train(config_path, seed=1234):
         avg_nar = total_nar / sample_count
         avg_ar = total_ar / sample_count
         print(f" Epoch {epoch:03d} | Loss: {avg_loss:.4f} (NAR: {avg_nar:.4f}, AR: {avg_ar:.4f})")
+        if skipped_short_sequences > 0:
+            print(f"  ⚠️ 跳过 {skipped_short_sequences} 条过短 AR 序列样本")
+        if padded_nar_labels > 0:
+            print(f"  ⚠️ 补齐 {padded_nar_labels} 条 NAR 标签（标签长度 < logits 长度）")
+        if truncated_nar_labels > 0:
+            print(f"  ⚠️ 截断 {truncated_nar_labels} 条 NAR 标签（标签长度 > logits 长度）")
 
         with open(trainer_params["metrics_csv"], "a", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
