@@ -3,9 +3,11 @@
 import os
 import time
 import random
+import hashlib
 import itertools
 import copy
 import csv
+import pickle
 from logging import getLogger
 from typing import List, Dict, Any, Tuple, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -120,6 +122,19 @@ class Search:
         # Setup device
         self.device = self._setup_device()
 
+        # Reproducibility
+        if "seed" in self.tester_params:
+            self.seed = int(self.tester_params["seed"])
+        elif "seed" in self.env_params:
+            self.seed = int(self.env_params["seed"])
+        else:
+            self.seed = 1234
+        random.seed(self.seed)
+        np.random.seed(self.seed)
+        torch.manual_seed(self.seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(self.seed)
+
         
         # Load trained models for learned destroy operations
         self.destroy_operators = self._load_destroy_operators()
@@ -130,6 +145,9 @@ class Search:
         
         # 创建一个列表用于在内存中暂存生成的训练数据
         self.training_data_buffer = []
+
+        self.test_dataset = None
+        self.test_dataset_size = None
 
         
        
@@ -197,7 +215,11 @@ class Search:
         self._load_test_dataset()
 
         # Process test instances
-        total_instances = self.tester_params.get("nb_instances", 1)
+        total_instances = self.tester_params.get("nb_instances", None)
+        if total_instances is None:
+            total_instances = self.test_dataset_size if self.test_dataset_size is not None else 1
+        if self.test_dataset_size is not None:
+            total_instances = min(total_instances, self.test_dataset_size)
         self.logger.info("=" * 80)
         self.logger.info(f"Starting search on {total_instances} instances")
         self.logger.info("=" * 80)
@@ -209,6 +231,13 @@ class Search:
         self.logger.info("=" * 80)
         self.logger.info(f" 多核模式: {num_processes} 个 CPU 核心")
         self.logger.info("=" * 80)
+
+        # Set tester_params.deterministic=True to force reproducible single-process execution.
+        deterministic = self.tester_params.get("deterministic", False)
+        if deterministic and num_processes > 1:
+            # Deterministic replay requires a fixed execution order, so disable multi-process mode.
+            self.logger.info("Deterministic mode enabled, forcing single-process execution.")
+            num_processes = 1
 
         if num_processes > 1:
             # 开启进程池并发
@@ -260,7 +289,52 @@ class Search:
         self.logger.info(f"成功保存 {len(self.training_data_buffer)} 条训练数据至 {save_path}")
 
     def _load_test_dataset(self) -> None:
-        return
+        cfg = self.tester_params.get("test_data_load", {})
+        if not cfg.get("enable", False):
+            self.test_dataset = None
+            self.test_dataset_size = None
+            return
+
+        filename = cfg.get("filename")
+        if filename is None:
+            raise ValueError("tester_params.test_data_load.filename is required when test_data_load.enable=True")
+        if not os.path.exists(filename):
+            raise FileNotFoundError(f"Test dataset file not found: {filename}")
+
+        use_pkl = cfg.get("use_pkl_file", filename.endswith(".pkl"))
+        if use_pkl:
+            with open(filename, "rb") as f:
+                self.test_dataset = pickle.load(f)
+            self.test_dataset_size = len(self.test_dataset)
+        else:
+            loaded = torch.load(filename, map_location="cpu", weights_only=True)
+            required = {"depot_xy", "node_xy", "node_demand", "capacity"}
+            if not isinstance(loaded, dict) or not required.issubset(set(loaded.keys())):
+                raise ValueError(f"Unsupported dataset format in {filename}; required keys: {sorted(required)}")
+            self.test_dataset = loaded
+            self.test_dataset_size = int(loaded["depot_xy"].shape[0])
+
+        self.logger.info(f"Loaded test dataset from {filename} ({self.test_dataset_size} instances)")
+
+    def _get_instance_raw_data(self, instance_idx: int):
+        if self.test_dataset is None:
+            filepath = self.tester_params.get("official_vrp_path", "./data/X-n101-k25.vrp")
+            return load_cvrplib_instance(filepath)
+
+        if isinstance(self.test_dataset, list):
+            depot_xy, node_xy, node_demand, capacity = self.test_dataset[instance_idx]
+            return (
+                np.asarray(depot_xy, dtype=np.float32).reshape(1, 2),
+                np.asarray(node_xy, dtype=np.float32),
+                np.asarray(node_demand, dtype=np.float32),
+                float(capacity),
+            )
+
+        depot_xy = self.test_dataset["depot_xy"][instance_idx].numpy().reshape(1, 2).astype(np.float32)
+        node_xy = self.test_dataset["node_xy"][instance_idx].numpy().astype(np.float32)
+        node_demand = self.test_dataset["node_demand"][instance_idx].numpy().astype(np.float32)
+        capacity = float(self.test_dataset["capacity"][instance_idx].item())
+        return depot_xy, node_xy, node_demand, capacity
 
     def _solve_one_instance(self, instance_idx: int) -> Dict[str, Any]:
         """
@@ -280,10 +354,7 @@ class Search:
         # ==========================================
         # [纯 Python 重构] 1. 加载并拆分数据
         # ==========================================
-        # 动态从 yaml 中读取路径，而不是写死！
-        filepath = self.tester_params.get("official_vrp_path", "./data/X-n101-k25.vrp")
-        
-        raw_d_xy, raw_n_xy, raw_n_dem, raw_capacity = load_cvrplib_instance(filepath)
+        raw_d_xy, raw_n_xy, raw_n_dem, raw_capacity = self._get_instance_raw_data(instance_idx)
         num_customers = len(raw_n_xy)
 
         self.full_node_xy = np.concatenate((raw_d_xy, raw_n_xy), axis=0).astype(np.float32)
@@ -349,6 +420,9 @@ class Search:
         incumbent_solution = None
 
         # Simulated Annealing loop
+        seed_input = f"{self.seed}:{int(instance_idx)}".encode("utf-8")
+        local_seed = int(hashlib.sha256(seed_input).hexdigest()[:16], 16)
+        local_rng = random.Random(local_seed)
         iteration = 0
         while iteration < max_iterations:
             
@@ -357,7 +431,7 @@ class Search:
             
             # Perform one SA iteration
             new_solutions = self._perform_sa_iteration(
-                aug_factor, rollout_size, sa_config["T"]
+                aug_factor, rollout_size, sa_config["T"], local_rng
             )
 
             # Update incumbent
@@ -429,7 +503,7 @@ class Search:
         return config
 
     def _perform_sa_iteration(
-        self, aug_factor: int, rollout_size: int, temperature: float
+        self, aug_factor: int, rollout_size: int, temperature: float, rng: random.Random
     ) -> List[Any]:
         use_ai_accelerator = (len(self.destroy_operators) > 0) and (not self.tester_params.get("use_baseline_destroy", True))
 
@@ -538,7 +612,6 @@ class Search:
                 # ==========================================
                 # 👑 [纯 Python 选点基准]：彻底甩掉 C++，自己写启发式破坏！
                 # ==========================================
-                import random
                 # 1. 摊平当前路径，找出所有真实的客户点 (排除车场 0)
                 all_customers = [node for tour in current_solution.tours for node in tour if node != 0]
                 
@@ -549,7 +622,7 @@ class Search:
                 selected_nodes = []
                 for _ in range(rollout_size):
                     # 随机挑选 15 个点作为被破坏的节点
-                    selected = random.sample(all_customers, num_to_remove)
+                    selected = rng.sample(all_customers, num_to_remove)
                     selected_nodes.append(selected)
 
             # 调用我们在 fsta_core.py 中定义的压缩与求解逻辑
