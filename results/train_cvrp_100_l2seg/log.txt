@@ -1,0 +1,237 @@
+[2026-04-01 14:27:42] train.py(60) : ================================================================================
+Configuration
+================================================================================
+env_params:
+  problem: cvrp
+  problem_size: 100
+  num_nodes_to_remove: 15
+  iterations_per_instance: 100
+  recreate_n: 5
+  beta: 0
+  insert_in_new_tours_only: true
+  num_processes: 8
+  generator_params:
+    use_X_generator: false
+    rootPos: 2
+    custPos: 2
+    demandType: 2
+    avgRouteSize: 3
+  starting_solution_params:
+    nb_iterations: 50
+    nb_nodes_ratio: 0.15
+model_params:
+  problem: ${env_params.problem}
+  problem_size: ${env_params.problem_size}
+  embedding_dim: 128
+  poly_embedding_dim: 256
+  sqrt_embedding_dim: 11.3137
+  encoder_layer_num: 2
+  tour_layer: true
+  message_passing_layer_num: 1
+  encoder_layer_num_2: 2
+  qkv_dim: 16
+  head_num: 8
+  logit_clipping: 10
+  ff_hidden_dim: 512
+  eval_type: softmax
+  z_dim: 10
+optimizer_params:
+  optimizer:
+    lr: 0.0001
+    weight_decay: 1.0e-06
+  scheduler:
+    milestones:
+    - 50
+    - 80
+    gamma: 0.1
+trainer_params:
+  use_cuda: true
+  cuda_device_num: 0
+  l2s_data_path: results/l2seg_training_data.pt
+  ar_loss_weight: 1.0
+  epochs: 100
+  train_batch_size: 64
+  grad_acc_iterations: 1
+  reward_type: i
+  iterations_per_epoch: 150000
+  rollout_size: 128
+  nb_skipped_iterations: 10
+  prev_model_path: None
+  model_save_interval: 10
+  model_load:
+    enable: false
+    path: null
+    epoch: null
+  valid_episodes: 1000
+  valid_iterations: 50
+  valid_batch_size: 50
+  valid_rollout_size: 100
+  valid_augmentation_enable: true
+  valid_aug_factor: 8
+  valid_data_load:
+    enable: true
+    filename: data/cvrp/vrp100_valid_seed1233.pkl
+logger_params:
+  desc: train_cvrp_100_l2seg
+  wandb:
+    enable: true
+    project: NDS
+================================================================================
+[2026-04-01 15:10:33] train.py(60) : ================================================================================
+Configuration
+================================================================================
+env_params:
+  problem: cvrp
+  problem_size: 100
+  num_nodes_to_remove: 15
+  iterations_per_instance: 100
+  recreate_n: 5
+  beta: 0
+  insert_in_new_tours_only: true
+  num_processes: 8
+  generator_params:
+    use_X_generator: false
+    rootPos: 2
+    custPos: 2
+    demandType: 2
+    avgRouteSize: 3
+  starting_solution_params:
+    nb_iterations: 50
+    nb_nodes_ratio: 0.15
+model_params:
+  problem: ${env_params.problem}
+  problem_size: ${env_params.problem_size}
+  embedding_dim: 128
+  poly_embedding_dim: 256
+  sqrt_embedding_dim: 11.3137
+  encoder_layer_num: 2
+  tour_layer: true
+  message_passing_layer_num: 1
+  encoder_layer_num_2: 2
+  qkv_dim: 16
+  head_num: 8
+  logit_clipping: 10
+  ff_hidden_dim: 512
+  eval_type: softmax
+  z_dim: 10
+optimizer_params:
+  optimizer:
+    lr: 0.0001
+    weight_decay: 1.0e-06
+  scheduler:
+    milestones:
+    - 50
+    - 80
+    gamma: 0.1
+trainer_params:
+  use_cuda: true
+  cuda_device_num: 0
+  l2s_data_path: results/l2seg_training_data.pt
+  ar_loss_weight: 1.0
+  epochs: 100
+  train_batch_size: 64
+  grad_acc_iterations: 1
+  reward_type: i
+  iterations_per_epoch: 150000
+  rollout_size: 128
+  nb_skipped_iterations: 10
+  prev_model_path: None
+  model_save_interval: 10
+  model_load:
+    enable: false
+    path: null
+    epoch: null
+  valid_episodes: 1000
+  valid_iterations: 50
+  valid_batch_size: 50
+  valid_rollout_size: 100
+  valid_augmentation_enable: true
+  valid_aug_factor: 8
+  valid_data_load:
+    enable: true
+    filename: data/cvrp/vrp100_valid_seed1233.pkl
+logger_params:
+  desc: train_cvrp_100_l2seg
+  wandb:
+    enable: true
+    project: NDS
+================================================================================
+[2026-04-01 15:14:40] train.py(60) : ================================================================================
+Configuration
+================================================================================
+env_params:
+  problem: cvrp
+  problem_size: 100
+  num_nodes_to_remove: 15
+  iterations_per_instance: 100
+  recreate_n: 5
+  beta: 0
+  insert_in_new_tours_only: true
+  num_processes: 4
+  generator_params:
+    use_X_generator: false
+    rootPos: 2
+    custPos: 2
+    demandType: 2
+    avgRouteSize: 3
+  starting_solution_params:
+    nb_iterations: 50
+    nb_nodes_ratio: 0.15
+model_params:
+  problem: ${env_params.problem}
+  problem_size: ${env_params.problem_size}
+  embedding_dim: 128
+  poly_embedding_dim: 256
+  sqrt_embedding_dim: 11.3137
+  encoder_layer_num: 2
+  tour_layer: true
+  message_passing_layer_num: 1
+  encoder_layer_num_2: 2
+  qkv_dim: 16
+  head_num: 8
+  logit_clipping: 10
+  ff_hidden_dim: 512
+  eval_type: softmax
+  z_dim: 10
+optimizer_params:
+  optimizer:
+    lr: 0.0001
+    weight_decay: 1.0e-06
+  scheduler:
+    milestones:
+    - 50
+    - 80
+    gamma: 0.1
+trainer_params:
+  use_cuda: true
+  cuda_device_num: 0
+  l2s_data_path: results/l2seg_training_data.pt
+  ar_loss_weight: 1.0
+  epochs: 100
+  train_batch_size: 64
+  grad_acc_iterations: 1
+  reward_type: i
+  iterations_per_epoch: 150000
+  rollout_size: 128
+  nb_skipped_iterations: 10
+  prev_model_path: None
+  model_save_interval: 10
+  model_load:
+    enable: false
+    path: null
+    epoch: null
+  valid_episodes: 1000
+  valid_iterations: 50
+  valid_batch_size: 50
+  valid_rollout_size: 100
+  valid_augmentation_enable: true
+  valid_aug_factor: 8
+  valid_data_load:
+    enable: true
+    filename: data/cvrp/vrp100_valid_seed1233.pkl
+logger_params:
+  desc: train_cvrp_100_l2seg
+  wandb:
+    enable: true
+    project: NDS
+================================================================================

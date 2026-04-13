@@ -1,0 +1,21 @@
+2026-02-11 12:47:28,678 INFO    MainThread:4184 [wandb_setup.py:_flush():81] Current SDK version is 0.24.2
+2026-02-11 12:47:28,678 INFO    MainThread:4184 [wandb_setup.py:_flush():81] Configure stats pid to 4184
+2026-02-11 12:47:28,678 INFO    MainThread:4184 [wandb_setup.py:_flush():81] Loading settings from environment variables
+2026-02-11 12:47:28,678 INFO    MainThread:4184 [wandb_init.py:setup_run_log_directory():717] Logging user logs to C:\Users\Administrator\Desktop\NDS-main\wandb\offline-run-20260211_124728-rhg9nvhn\logs\debug.log
+2026-02-11 12:47:28,678 INFO    MainThread:4184 [wandb_init.py:setup_run_log_directory():718] Logging internal logs to C:\Users\Administrator\Desktop\NDS-main\wandb\offline-run-20260211_124728-rhg9nvhn\logs\debug-internal.log
+2026-02-11 12:47:28,678 INFO    MainThread:4184 [wandb_init.py:init():844] calling init triggers
+2026-02-11 12:47:28,678 INFO    MainThread:4184 [wandb_init.py:init():849] wandb.init called with sweep_config: {}
+config: {'env_params': {'problem': 'vrptw', 'problem_size': 100, 'num_nodes_to_remove': 15, 'iterations_per_instance': 100, 'recreate_n': 5, 'beta': 0, 'insert_in_new_tours_only': True, 'num_processes': 8, 'generator_params': {'use_X_generator': True, 'rootPos': 2, 'custPos': 2, 'demandType': 2, 'avgRouteSize': 3, 'service_window': 1800, 'time_window_size': 400, 'service_duration': 50}, 'starting_solution_params': {'nb_iterations': 50, 'nb_nodes_ratio': 0.15}}, 'model_params': {'problem': '${env_params.problem}', 'embedding_dim': 128, 'poly_embedding_dim': 256, 'sqrt_embedding_dim': 11.3137, 'encoder_layer_num': 2, 'tour_layer': True, 'message_passing_layer_num': 1, 'encoder_layer_num_2': 2, 'qkv_dim': 16, 'head_num': 8, 'logit_clipping': 10, 'ff_hidden_dim': 512, 'eval_type': 'softmax', 'z_dim': 10}, 'optimizer_params': {'optimizer': {'lr': 0.0001, 'weight_decay': 1e-06}, 'scheduler': {'milestones': [8001, 8051], 'gamma': 0.1}}, 'trainer_params': {'use_cuda': True, 'cuda_device_num': 0, 'reward_type': 'i', 'epochs': 100, 'iterations_per_epoch': 150000, 'train_batch_size': 64, 'grad_acc_iterations': '${env_params.iterations_per_instance}', 'rollout_size': 128, 'nb_skipped_iterations': 10, 'prev_model_path': 'None', 'model_save_interval': 50, 'model_load': {'enable': False, 'path': None, 'epoch': None}, 'valid_episodes': 1000, 'valid_iterations': 50, 'valid_batch_size': 50, 'valid_rollout_size': 100, 'valid_augmentation_enable': True, 'valid_aug_factor': 8, 'valid_data_load': {'enable': True, 'filename': 'data/vrptw/vrptw100_valid_seed1233_2_2_2_3_1800_400_50.pt'}}, '_wandb': {}}
+2026-02-11 12:47:28,678 INFO    MainThread:4184 [wandb_init.py:init():892] starting backend
+2026-02-11 12:47:31,039 INFO    MainThread:4184 [wandb_init.py:init():895] sending inform_init request
+2026-02-11 12:47:31,056 INFO    MainThread:4184 [wandb_init.py:init():903] backend started and connected
+2026-02-11 12:47:31,058 INFO    MainThread:4184 [wandb_init.py:init():973] updated telemetry
+2026-02-11 12:47:31,059 INFO    MainThread:4184 [wandb_init.py:init():997] communicating run to backend with 90.0 second timeout
+2026-02-11 12:47:31,181 INFO    MainThread:4184 [wandb_init.py:init():1042] starting run threads in backend
+2026-02-11 12:47:31,231 INFO    MainThread:4184 [wandb_run.py:_console_start():2529] atexit reg
+2026-02-11 12:47:31,231 INFO    MainThread:4184 [wandb_run.py:_redirect():2377] redirect: wrap_raw
+2026-02-11 12:47:31,231 INFO    MainThread:4184 [wandb_run.py:_redirect():2446] Wrapping output streams.
+2026-02-11 12:47:31,231 INFO    MainThread:4184 [wandb_run.py:_redirect():2469] Redirects installed.
+2026-02-11 12:47:31,233 INFO    MainThread:4184 [wandb_init.py:init():1082] run started, returning control to user process
+2026-02-11 22:21:47,186 INFO    wandb-AsyncioManager-main:4184 [service_client.py:_forward_responses():94] Reached EOF.
+2026-02-11 22:21:47,186 INFO    wandb-AsyncioManager-main:4184 [mailbox.py:close():154] Closing mailbox, abandoning 0 handles.
