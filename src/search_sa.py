@@ -3,6 +3,7 @@
 import os
 import time
 import random
+import hashlib
 import itertools
 import copy
 import csv
@@ -28,8 +29,6 @@ from .seed_sampler import SeedVectorSampler
 from .label_generator import L2SegLabelGenerator
 
 from .fsta_core import FSTA_Compressor
-
-SEED_MIXING_PRIME = 1000003
 
 
 class MockProblemFeat:
@@ -423,7 +422,8 @@ class Search:
         incumbent_solution = None
 
         # Simulated Annealing loop
-        local_seed = (self.seed * SEED_MIXING_PRIME + int(instance_idx)) & 0xFFFFFFFF
+        seed_input = f"{self.seed}:{int(instance_idx)}".encode("utf-8")
+        local_seed = int(hashlib.sha256(seed_input).hexdigest()[:8], 16)
         local_rng = random.Random(local_seed)
         iteration = 0
         while iteration < max_iterations:
