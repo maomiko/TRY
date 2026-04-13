@@ -232,6 +232,7 @@ class Search:
         self.logger.info(f" 多核模式: {num_processes} 个 CPU 核心")
         self.logger.info("=" * 80)
 
+        # Set tester_params.deterministic=True to force reproducible single-process execution.
         deterministic = self.tester_params.get("deterministic", False)
         if deterministic and num_processes > 1:
             # Deterministic replay requires a fixed execution order, so disable multi-process mode.
@@ -420,7 +421,7 @@ class Search:
 
         # Simulated Annealing loop
         seed_input = f"{self.seed}:{int(instance_idx)}".encode("utf-8")
-        local_seed = int(hashlib.sha256(seed_input).hexdigest()[:8], 16)
+        local_seed = int(hashlib.sha256(seed_input).hexdigest()[:16], 16)
         local_rng = random.Random(local_seed)
         iteration = 0
         while iteration < max_iterations:
