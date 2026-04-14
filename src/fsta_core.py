@@ -62,8 +62,9 @@ class FSTA_Compressor:
                 timeout=60,
             )
             src_root = os.path.join(build_dir, "LKH-3.0.14")
+            jobs = max(1, min(os.cpu_count() or 1, 8))
             subprocess.run(
-                ["make", "-C", src_root, "-j"],
+                ["make", "-C", src_root, f"-j{jobs}"],
                 check=True,
                 capture_output=True,
                 text=True,
@@ -75,7 +76,8 @@ class FSTA_Compressor:
             shutil.copy2(built_binary, target_binary)
             self._try_mark_executable(target_binary)
             return target_binary if self._can_execute(target_binary) else ""
-        except Exception:
+        except Exception as e:
+            print(f"[LKH auto-build] failed: {e}")
             return ""
         finally:
             shutil.rmtree(build_dir, ignore_errors=True)
@@ -108,7 +110,9 @@ class FSTA_Compressor:
             seen.add(candidate)
             candidates.append(candidate)
 
+        checked_candidates = []
         for candidate in candidates:
+            checked_candidates.append(candidate)
             if os.name != "nt" and self._is_windows_exe(candidate):
                 continue
             if os.path.exists(candidate):
@@ -125,11 +129,13 @@ class FSTA_Compressor:
             raise RuntimeError(
                 "No usable LKH binary found. On Linux/macOS, provide tester_params.lkh_path "
                 "pointing to a native executable (e.g. ./LKH-3), or keep LKH-3.0.14.tgz in "
-                "repository root for auto-build."
+                "repository root for auto-build. Checked paths: "
+                + ", ".join(checked_candidates)
             )
 
         raise RuntimeError(
-            "No usable LKH binary found. On Windows, set tester_params.lkh_path to LKH-3.exe."
+            "No usable LKH binary found. On Windows, set tester_params.lkh_path to LKH-3.exe. "
+            "Checked paths: " + ", ".join(checked_candidates)
         )
 
     def _extract_segments(self, tours: List[List[int]], destroyed_nodes: Set[int]) -> List[List[int]]:
