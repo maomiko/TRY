@@ -765,6 +765,12 @@ class CVRP_Decoder(nn.Module):
         self.sqrt_embedding_dim = model_params["sqrt_embedding_dim"]
         self.logit_clipping = model_params["logit_clipping"]
         self.z_dim = model_params["z_dim"] # 将 z_dim 保存为类属性
+
+        # 兼容 forward / forward_sequence 的共享注意力投影
+        self.Wq_last = nn.Linear(embedding_dim, head_num * qkv_dim, bias=False)
+        self.Wk = nn.Linear(embedding_dim, head_num * qkv_dim, bias=False)
+        self.Wv = nn.Linear(embedding_dim, head_num * qkv_dim, bias=False)
+        self.multi_head_combine = nn.Linear(head_num * qkv_dim, embedding_dim)
         
         # L2Seg 新增: 一个可学习的向量，代表 END_TOKEN 在 Pointer Network 中的被指向 Key
         self.end_token_key = nn.Parameter(torch.randn(1, embedding_dim, 1))
@@ -786,6 +792,10 @@ class CVRP_Decoder(nn.Module):
         # 原始 single_head_key: (batch, dim, problem_size + 1)
         base_key = encoded_nodes.transpose(1, 2)
         batch_size = encoded_nodes.size(0)
+
+        # 供注意力层复用的 KV 缓存（不含 END_TOKEN）
+        self.k = reshape_by_heads(self.Wk(encoded_nodes), self.head_num)
+        self.v = reshape_by_heads(self.Wv(encoded_nodes), self.head_num)
         
         # 将 END_TOKEN 扩展到当前 batch size，并拼接到原图节点后面
         # 拼接后形状变为: (batch, dim, problem_size + 2)
