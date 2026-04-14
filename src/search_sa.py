@@ -149,7 +149,13 @@ class Search:
         self.test_dataset_size = None
 
         self.lkh_path = self._resolve_lkh_path()
-        self.iteration_log_interval = int(self.tester_params.get("iteration_log_interval", 5))
+        raw_iteration_log_interval = int(self.tester_params.get("iteration_log_interval", 5))
+        if raw_iteration_log_interval < 0:
+            self.logger.warning(
+                "iteration_log_interval=%s is negative; clamped to 0 (disable per-iteration logs).",
+                raw_iteration_log_interval,
+            )
+        self.iteration_log_interval = max(0, raw_iteration_log_interval)
 
         
        

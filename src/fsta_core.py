@@ -37,9 +37,10 @@ class FSTA_Compressor:
         self.max_vehicles = max_vehicles
         self.timeout_sec = max(1, int(timeout_sec))
         self._disable_lkh = False
-        self.lkh_trace = bool(lkh_trace)
+        self.lkh_trace = lkh_trace
 
     def _trace_print(self, message: str) -> None:
+        """Conditionally emit LKH debugging traces when lkh_trace is enabled."""
         if self.lkh_trace:
             print(message)
 
@@ -659,7 +660,6 @@ class FSTA_Compressor:
             return recovered
 
         except subprocess.TimeoutExpired as e:
-            print("[LKH] timeout detected, applying rescue retry.")
             self._trace_print("\n" + "!"*60)
             self._trace_print("LKH-3 陷入死循环，已被 Python 强制狙击！")
             self._trace_print("让我们看看它死前到底卡在哪一步了：")
@@ -710,7 +710,6 @@ class FSTA_Compressor:
                 self._trace_print(f"[LKH trace] timeout rescue retry failed: {retry_err}")
             return _fallback_tour(tours)
         except (FileNotFoundError, PermissionError, OSError) as e:
-            print(f"[LKH] executable unavailable, fallback enabled: {e}")
             self._trace_print("\n" + "="*60)
             self._trace_print("💀 LKH-3 不可执行或缺失，已成功拦截，正在平滑回退。")
             self._trace_print(f"👉 错误原因: {e}")
