@@ -382,6 +382,7 @@ class Search:
 
         # Initialize SA parameters
         sa_config = self._init_simulated_annealing()
+        expert_data_mode = bool(self.tester_params.get("expert_data_mode", False))
 
         start_time = time.time()
 
@@ -453,9 +454,8 @@ class Search:
         print(f"✅ 初始解生成完毕！初始 Cost: {base_solution.totalCosts:.2f}")
 
         # Track best solution
-        incumbent_cost = np.inf
-
-        incumbent_solution = None
+        incumbent_cost = base_solution.totalCosts
+        incumbent_solution = copy.deepcopy(base_solution)
 
         # Simulated Annealing loop
         seed_input = f"{self.seed}:{int(instance_idx)}".encode("utf-8")
@@ -463,51 +463,64 @@ class Search:
         local_rng = random.Random(local_seed)
         iteration = 0
         while iteration < max_iterations:
-            
+
             if iteration % 5 == 0:
-                print(f" 实例 {instance_idx} | SA 退火迭代: {iteration}/{max_iterations} | 当前最佳 Cost: {incumbent_cost:.2f}")
-            
-            # Perform one SA iteration
-            new_solutions = self._perform_sa_iteration(
-                aug_factor, rollout_size, sa_config["T"], local_rng
-            )
+                loop_name = "专家迭代" if expert_data_mode else "SA 退火迭代"
+                print(f" 实例 {instance_idx} | {loop_name}: {iteration}/{max_iterations} | 当前最佳 Cost: {incumbent_cost:.2f}")
 
-            # SA 接受/拒绝：Metropolis 准则
-            current_temp = max(float(sa_config["T"]), MIN_SA_TEMPERATURE)
-            accepted_solutions = []
-            for old_sol, new_sol in zip(self.my_python_solutions, new_solutions):
-                old_cost = old_sol.totalCosts
-                new_cost = new_sol.totalCosts
-                delta_cost = new_cost - old_cost
+            if expert_data_mode:
+                # 论文 Algorithm 2 风格：R <- R+，独立于退火接受逻辑
+                new_solutions = self._perform_sa_iteration(
+                    aug_factor, rollout_size, sa_config["T"], local_rng
+                )
+                self.my_python_solutions = new_solutions
 
-                accept = False
-                if delta_cost <= 0:
-                    accept = True
-                else:
-                    accept_prob = float(np.exp(-delta_cost / current_temp))
-                    accept = local_rng.random() < accept_prob
-
-                accepted_solutions.append(new_sol if accept else old_sol)
-
-            # Update incumbent
-            for sol in accepted_solutions:
-                if sol.totalCosts < incumbent_cost:
-                    incumbent_cost = sol.totalCosts
-                    incumbent_solution = sol
-
-            # Synchronize augmented solutions (only when aug_factor > 1)
-            if aug_factor > 1:
-                self._synchronize_augmented_solutions(
-                    accepted_solutions, sa_config["T"], sa_config["delta"]
+                for sol in new_solutions:
+                    if sol.totalCosts < incumbent_cost:
+                        incumbent_cost = sol.totalCosts
+                        incumbent_solution = sol
+            else:
+                # Perform one SA iteration
+                new_solutions = self._perform_sa_iteration(
+                    aug_factor, rollout_size, sa_config["T"], local_rng
                 )
 
-            # Update solutions in environment
-            self.my_python_solutions = accepted_solutions
+                # SA 接受/拒绝：Metropolis 准则
+                current_temp = max(float(sa_config["T"]), MIN_SA_TEMPERATURE)
+                accepted_solutions = []
+                for old_sol, new_sol in zip(self.my_python_solutions, new_solutions):
+                    old_cost = old_sol.totalCosts
+                    new_cost = new_sol.totalCosts
+                    delta_cost = new_cost - old_cost
 
-            # Update temperature
-            sa_config["T"] = self._update_temperature(
-                sa_config, iteration, start_time, max_iterations
-            )
+                    accept = False
+                    if delta_cost <= 0:
+                        accept = True
+                    else:
+                        accept_prob = float(np.exp(-delta_cost / current_temp))
+                        accept = local_rng.random() < accept_prob
+
+                    accepted_solutions.append(new_sol if accept else old_sol)
+
+                # Update incumbent
+                for sol in accepted_solutions:
+                    if sol.totalCosts < incumbent_cost:
+                        incumbent_cost = sol.totalCosts
+                        incumbent_solution = sol
+
+                # Synchronize augmented solutions (only when aug_factor > 1)
+                if aug_factor > 1:
+                    self._synchronize_augmented_solutions(
+                        accepted_solutions, sa_config["T"], sa_config["delta"]
+                    )
+
+                # Update solutions in environment
+                self.my_python_solutions = accepted_solutions
+
+                # Update temperature
+                sa_config["T"] = self._update_temperature(
+                    sa_config, iteration, start_time, max_iterations
+                )
 
             iteration += 1
 
@@ -526,6 +539,70 @@ class Search:
             "nb_iterations": iteration,
             "solution": incumbent_solution,
         }
+
+    def _should_accept_expert_label(self, improvement: float, rng: random.Random) -> bool:
+        """Algorithm 2 gating: improvement threshold η_improv + stochastic acceptance α_AC."""
+        min_improvement = float(self.tester_params.get("eta_improv", 0.0))
+        if improvement < min_improvement:
+            return False
+
+        alpha_ac = float(self.tester_params.get("alpha_ac", 1.0))
+        # 论文中 small-capacity 常配 α_AC=0，这里约定为“不额外下采样”。
+        if alpha_ac <= 0.0:
+            return True
+        return rng.random() <= min(alpha_ac, 1.0)
+
+    def _collect_expert_training_labels(
+        self,
+        tours_before: List[List[int]],
+        current_cost: float,
+        new_solution: "PurePythonSolution",
+        state_snapshot: Dict[str, torch.Tensor],
+        rng: random.Random,
+    ) -> None:
+        improvement = float(current_cost - new_solution.totalCosts)
+        if improvement <= 0:
+            return
+
+        subproblem_labels = self.label_generator.generate_labels(tours_before, new_solution.getTourList())
+        for sub_label in subproblem_labels:
+            if not self._should_accept_expert_label(improvement, rng):
+                continue
+
+            involved_nodes = sub_label["involved_nodes"]
+            if len(involved_nodes) == 0:
+                continue
+
+            customer_nodes = [x for x in involved_nodes if x != 0]
+            if len(customer_nodes) == 0:
+                continue
+            idx_tensor = torch.tensor([x - 1 for x in customer_nodes], dtype=torch.long)
+
+            g2l_map = {g_id: l_idx + 1 for l_idx, g_id in enumerate(customer_nodes)}
+            g2l_map[0] = 0
+
+            raw_neighbours = state_snapshot["neighbours"][idx_tensor].tolist()
+            local_neighbours = []
+            for left, right in raw_neighbours:
+                local_neighbours.append([g2l_map.get(left, 0), g2l_map.get(right, 0)])
+            local_neighbours_tensor = torch.tensor(local_neighbours, dtype=torch.long)
+
+            local_state_dict = {
+                "depot_xy": state_snapshot["depot_xy"],
+                "node_xy": state_snapshot["node_xy"][idx_tensor],
+                "node_demand": state_snapshot["node_demand"][idx_tensor],
+                "tour_index": state_snapshot["tour_index"][idx_tensor],
+                "neighbours": local_neighbours_tensor,
+                "global_node_indices": customer_nodes,
+            }
+
+            self.training_data_buffer.append(
+                {
+                    "nar_labels": sub_label["nar_labels"],
+                    "ar_sequences": sub_label["ar_sequence"],
+                    "state_dict": local_state_dict,
+                }
+            )
 
     def _init_simulated_annealing(self) -> Dict[str, Any]:
         """Initialize Simulated Annealing parameters."""
@@ -704,71 +781,18 @@ class Search:
             # 这里非常关键：你需要使用你项目中更新路径的方法
             # 如果你使用的是 InstanceSet 维护的解，可能需要类似下面的操作：
             
-            # ==========================================
-            # 👑 [终极修复：通过 C++ 绑定的 Getter 方法提取 Instance]
-            # ==========================================
-            tours_list = current_solution.getTourList()
-            
-            
             new_solution = PurePythonSolution(new_tours, self.full_node_xy)
 
-
-            
-            
-            # 提取优化后的路径
-            tours_after = new_solution.getTourList()
-
             # ==========================================
-            # 3. 生成标签并打包存入 Buffer
+            # 3. 生成论文 Algorithm 2 风格专家标签并存入 Buffer
             # ==========================================
-            # 只有当路径成本实质性下降时，才认为这是一次成功的专家操作
-            if current_solution.totalCosts > new_solution.totalCosts:
-                # 名字没变！直接调用，但返回的是一个包含了多个局部标签的列表
-                subproblem_labels = self.label_generator.generate_labels(
-                    tours_before, tours_after
-                )
-                
-                # 遍历这一次迭代产生的“多个”局部修补操作
-                for sub_label in subproblem_labels:
-                    involved_nodes = sub_label["involved_nodes"]
-                    
-                    if len(involved_nodes) == 0:
-                        continue
-                        
-                    # 【核心修复】：分离 Depot，把 1~100 的客户 ID 转为 0~99 的张量索引
-                    customer_nodes = [x for x in involved_nodes if x != 0]
-                    # 把 involved_nodes 转换为 tensor，方便对 state_snapshot 进行切片
-                    idx_tensor = torch.tensor([x - 1 for x in customer_nodes], dtype=torch.long)
-
-
-                    # === 新增：将全局 neighbours 映射为局部 neighbours ===
-                    # 建立映射表，Depot 依然是 0
-                    g2l_map = {g_id: l_idx + 1 for l_idx, g_id in enumerate(customer_nodes)}
-                    g2l_map[0] = 0  
-                    
-                    raw_neighbours = state_snapshot["neighbours"][idx_tensor].tolist()
-                    local_neighbours = []
-                    for left, right in raw_neighbours:
-                        # 如果邻居不在这个切片里，就当它连着车场 (0)
-                        local_neighbours.append([g2l_map.get(left, 0), g2l_map.get(right, 0)])
-                    local_neighbours_tensor = torch.tensor(local_neighbours, dtype=torch.long)
-                    
-                    # 【核心】：从全图快照中，只切出这两条路线的特征！
-                    local_state_dict = {
-                        "depot_xy": state_snapshot["depot_xy"], # 车场坐标不变
-                        "node_xy": state_snapshot["node_xy"][idx_tensor], 
-                        "node_demand": state_snapshot["node_demand"][idx_tensor],
-                        "tour_index": state_snapshot["tour_index"][idx_tensor],
-                        "neighbours": local_neighbours_tensor, # <--- 加回邻居
-                        "global_node_indices": customer_nodes # 注意：这里只存客户 ID 了！  
-                    }
-
-                    # 把这个“微型子问题”存入 buffer
-                    self.training_data_buffer.append({
-                        "nar_labels": sub_label["nar_labels"],       # 局部 NAR 标签
-                        "ar_sequences": sub_label["ar_sequence"],    # 局部 AR 序列
-                        "state_dict": local_state_dict               # 纯局部的特征快照
-                    })
+            self._collect_expert_training_labels(
+                tours_before=tours_before,
+                current_cost=current_solution.totalCosts,
+                new_solution=new_solution,
+                state_snapshot=state_snapshot,
+                rng=rng,
+            )
 
             new_solutions.append(new_solution)
 
