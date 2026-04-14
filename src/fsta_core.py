@@ -7,7 +7,9 @@ import shutil
 import stat
 from typing import List, Set, Tuple, Dict
 
-UINT32_RANGE = 1 << 32
+UINT32_MODULUS = 1 << 32
+WINDOWS_ACCESS_VIOLATION = -1073741819  # 0xC0000005
+WINDOWS_STACK_BUFFER_OVERRUN = -1073740791  # 0xC0000409
 
 class FSTA_Compressor:
     """
@@ -170,11 +172,11 @@ class FSTA_Compressor:
     def _format_returncode_as_hex(returncode: int) -> str:
         """Format return code as hex; negative values are mapped to unsigned 32-bit form (common on Windows)."""
         if returncode < 0:
-            return hex(UINT32_RANGE + returncode)
+            return hex(UINT32_MODULUS + returncode)
         return hex(returncode)
 
     def _classify_failure(self, returncode: int, stdout: str, stderr: str) -> str:
-        if returncode in (-1073741819, -1073740791):
+        if returncode in (WINDOWS_ACCESS_VIOLATION, WINDOWS_STACK_BUFFER_OVERRUN):
             return "lkh_process_crash"
 
         msg = f"{stdout}\n{stderr}".lower()
