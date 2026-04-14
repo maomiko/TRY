@@ -67,6 +67,10 @@ cp LKH-3.0.14/LKH ./LKH-3
 chmod +x ./LKH-3
 ```
 
+Windows 排查（LKH 崩溃 vs 数据参数崩溃）请参考：
+
+- `WINDOWS_LKH_TROUBLESHOOTING.md`
+
 期望输出：
 
 - `results/l2seg_dataset/l2seg_training_data.pt`

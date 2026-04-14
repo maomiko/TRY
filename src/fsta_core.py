@@ -2,8 +2,7 @@ import numpy as np
 import os
 import tempfile
 import subprocess
-import time
-import uuid   
+import uuid
 import shutil
 import stat
 from typing import List, Set, Tuple, Dict
@@ -164,6 +163,98 @@ class FSTA_Compressor:
                 segments.append(current_segment)
         return segments
 
+    @staticmethod
+    def _returncode_hex(returncode: int) -> str:
+        if returncode < 0:
+            return hex((1 << 32) + returncode)
+        return hex(returncode)
+
+    def _classify_failure(self, returncode: int, stdout: str, stderr: str) -> str:
+        if returncode in (-1073741819, -1073740791):
+            return "lkh_process_crash"
+
+        msg = f"{stdout}\n{stderr}".lower()
+        data_keywords = (
+            "dimension",
+            "demand",
+            "capacity",
+            "vehicles",
+            "invalid",
+            "infeasible",
+            "not feasible",
+            "parameter",
+            "problem_file",
+        )
+        if any(k in msg for k in data_keywords):
+            return "data_or_parameter_error"
+        return "unknown_nonzero_exit"
+
+    @staticmethod
+    def _extract_head_tail_lines(text: str, line_count: int = 50) -> Tuple[List[str], List[str]]:
+        lines = text.splitlines()
+        head = lines[:line_count]
+        tail = lines[-line_count:] if len(lines) > line_count else lines
+        return head, tail
+
+    def _log_lkh_context(
+        self,
+        run_id: str,
+        command: List[str],
+        par_path: str,
+        vrp_path: str,
+        out_path: str,
+        safe_vehicles: int,
+        min_required_vehicles: int,
+        max_feasible_vehicles: int,
+    ) -> None:
+        print("\n" + "=" * 80)
+        print("[LKH trace] minimal reproducible context")
+        print(f"run_id: {run_id}")
+        print(f"command: {' '.join(command)}")
+        print(f"lkh_path: {self.lkh_path}")
+        print(f"par_path: {par_path}")
+        print(f"vrp_path: {vrp_path}")
+        print(f"tour_path: {out_path}")
+        print(
+            "vehicles: "
+            f"safe={safe_vehicles}, min_required={min_required_vehicles}, max_feasible={max_feasible_vehicles}"
+        )
+        print("=" * 80)
+
+    def _log_process_result(self, process_result: subprocess.CompletedProcess) -> None:
+        returncode = process_result.returncode
+        stdout = process_result.stdout or ""
+        stderr = process_result.stderr or ""
+        classification = self._classify_failure(returncode, stdout, stderr)
+
+        print("\n" + "=" * 80)
+        print("[LKH trace] process result")
+        print(f"returncode: {returncode} ({self._returncode_hex(returncode)})")
+        print(f"classification: {classification}")
+
+        stdout_head, stdout_tail = self._extract_head_tail_lines(stdout, line_count=50)
+        stderr_head, stderr_tail = self._extract_head_tail_lines(stderr, line_count=50)
+        print(f"stdout_head_50: {stdout_head}")
+        print(f"stdout_tail_50: {stdout_tail}")
+        print(f"stderr_head_50: {stderr_head}")
+        print(f"stderr_tail_50: {stderr_tail}")
+
+        if classification == "lkh_process_crash":
+            print("判定: LKH 本体/运行环境崩溃（Windows 异常退出码）")
+        elif classification == "data_or_parameter_error":
+            print("判定: 更可能是数据/参数问题（建议检查 DIMENSION/DEMAND/CAPACITY/VEHICLES）")
+        else:
+            print("判定: 非零退出但原因不明确，建议结合手工运行与多输入对比排查")
+        print("=" * 80 + "\n")
+
+    def _run_lkh_once(self, par_path: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [self.lkh_path, par_path],
+            capture_output=True,
+            text=True,
+            timeout=self.timeout_sec,
+        )
+
     def run_fsta_reoptimization(self, tours: List[List[int]], destroyed_nodes: Set[int]):
         """
         步骤 2 & 3：图压缩与 LKH 求解 (严密对齐 Appendix B.1.5)
@@ -270,20 +361,42 @@ class FSTA_Compressor:
                 f"max_feasible_vehicles ({max_feasible_vehicles})"
             )
             self._write_par(par_path, vrp_path, out_path, vehicles=safe_vehicles)
-
-            process_result = subprocess.run(
-                [self.lkh_path, par_path],
-                capture_output=True,
-                text=True,
-                timeout=self.timeout_sec
+            run_command = [self.lkh_path, par_path]
+            self._log_lkh_context(
+                run_id=run_id,
+                command=run_command,
+                par_path=par_path,
+                vrp_path=vrp_path,
+                out_path=out_path,
+                safe_vehicles=safe_vehicles,
+                min_required_vehicles=min_required_vehicles,
+                max_feasible_vehicles=max_feasible_vehicles,
             )
+
+            process_result = self._run_lkh_once(par_path)
+            if process_result.returncode != 0:
+                self._log_process_result(process_result)
+                classification = self._classify_failure(
+                    process_result.returncode,
+                    process_result.stdout or "",
+                    process_result.stderr or "",
+                )
+                if classification == "data_or_parameter_error":
+                    retry_vehicles = min(max_feasible_vehicles, max(safe_vehicles + 1, min_required_vehicles))
+                    if retry_vehicles > safe_vehicles:
+                        print(
+                            f"[LKH trace] data/parameter-like failure detected, retry once with "
+                            f"relaxed VEHICLES={retry_vehicles}"
+                        )
+                        self._write_par(par_path, vrp_path, out_path, vehicles=retry_vehicles)
+                        process_result = self._run_lkh_once(par_path)
+                        if process_result.returncode == 0:
+                            print("[LKH trace] retry succeeded with relaxed VEHICLES.")
+                        else:
+                            self._log_process_result(process_result)
 
             # 👑 核心防御：如果 LKH 底层崩溃，绝对不能交白卷！必须触发平滑回退
             if process_result.returncode != 0:
-                print("\n" + "="*60)
-                print("💀 LKH-3 引擎发生底层崩溃！已成功拦截，正在平滑回退。")
-                print(f"👉 错误原因 (STDERR): {process_result.stderr}")
-                print("="*60 + "\n")
                 return _fallback_tour(tours)
 
             # 5. 读取与无损解码
