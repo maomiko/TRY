@@ -29,6 +29,8 @@ from .label_generator import L2SegLabelGenerator
 
 from .fsta_core import FSTA_Compressor
 
+MIN_SA_TEMPERATURE = 1e-12
+
 
 class MockProblemFeat:
     def __init__(self, depot_xy, node_xy, node_demand):
@@ -440,7 +442,7 @@ class Search:
                 if delta_cost <= 0:
                     accept = True
                 else:
-                    temp = max(float(sa_config["T"]), 1e-12)
+                    temp = max(float(sa_config["T"]), MIN_SA_TEMPERATURE)
                     accept_prob = float(np.exp(-delta_cost / temp))
                     accept = local_rng.random() < accept_prob
 
