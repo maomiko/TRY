@@ -62,7 +62,11 @@ class FSTA_Compressor:
                 timeout=60,
             )
             src_root = os.path.join(build_dir, "LKH-3.0.14")
-            jobs = max(1, min(os.cpu_count() or 1, 8))
+            env_jobs = os.getenv("LKH_BUILD_JOBS")
+            if env_jobs and env_jobs.isdigit():
+                jobs = max(1, int(env_jobs))
+            else:
+                jobs = max(1, min(os.cpu_count() or 1, 8))
             subprocess.run(
                 ["make", "-C", src_root, f"-j{jobs}"],
                 check=True,
