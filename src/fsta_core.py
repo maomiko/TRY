@@ -5,7 +5,7 @@ import subprocess
 import uuid
 import shutil
 import stat
-from typing import List, Set, Tuple, Dict
+from typing import List, Set, Tuple, Dict, Optional
 
 UINT32_MODULUS = 1 << 32
 WINDOWS_ACCESS_VIOLATION = -1073741819  # 0xC0000005
@@ -190,7 +190,6 @@ class FSTA_Compressor:
             "not feasible",
             "parameter",
             "no candidates",
-            "has no candidates",
         )
         if any(k in msg for k in data_keywords):
             return "data_or_parameter_error"
@@ -285,7 +284,7 @@ class FSTA_Compressor:
         distances: np.ndarray,
         demands: np.ndarray,
         fixed_edges_lkh: List[Tuple[int, int]],
-    ) -> Tuple[np.ndarray, np.ndarray] | None:
+    ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
         if distances.ndim != 2 or distances.shape[0] != distances.shape[1]:
             return None
         n = distances.shape[0]
