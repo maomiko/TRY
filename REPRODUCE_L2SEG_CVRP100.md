@@ -119,3 +119,30 @@ python eval.py --config configs/reproduce/eval_ai_cvrp100.yaml --seed 1234
    - `eval_ai_cvrp100.yaml`
 2. 训练入口 `train.py` 配置化，去除关键硬编码（数据路径、epoch、lr、checkpoint 路径、loss 权重等）
 3. `search_sa.py` 支持通过配置覆盖 `nar_threshold` 和 `n_kmeans`，并支持自定义训练数据保存路径
+
+## 6) 最小复现实例脚本（固定种子 + 单实例）
+
+用于快速自动验证“不会出现 0.00 幽灵解，并且异常不会冒泡导致主流程崩溃”：
+
+```bash
+python repro_min_case.py \
+  --config configs/reproduce/label_gen_cvrp100.yaml \
+  --seed 1234 \
+  --instance-idx 0 \
+  --nb-iterations 5
+```
+
+脚本行为：
+
+- 强制单实例、单进程、固定种子、CPU、基线破坏策略（不依赖模型 checkpoint）
+- 运行一次最小 SA 求解流程
+- 自动校验：
+  - `cost` 为有限正数（拒绝 `0.00` 幽灵解）
+  - 解不为空
+  - 客户节点无重复、无缺失、全集覆盖正确
+
+返回码约定：
+
+- `0`：通过
+- `1`：求解返回了无效/幽灵解
+- `2`：脚本自身或运行流程崩溃
