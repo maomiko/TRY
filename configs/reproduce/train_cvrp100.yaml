@@ -1,0 +1,52 @@
+paper_reference:
+  source_pdf: "2507.01037v2.pdf"
+  note: "论文 D.3 推荐: 200 epochs, ADAM, 小规模 CVRP 学习率 1e-4"
+
+env_params:
+  problem: "cvrp"
+  problem_size: 100
+  num_processes: 1
+  num_nodes_to_remove: 15
+  beta: 0.0
+  insert_in_new_tours_only: true
+  recreate_n: 5
+
+model_params:
+  problem: "cvrp"
+  problem_size: 100
+  embedding_dim: 128
+  encoder_layer_num: 3
+  head_num: 8
+  qkv_dim: 16
+  decoder_layer_num: 4
+  ff_hidden_dim: 512
+  tour_layer: true
+  message_passing_layer_num: 3
+  encoder_layer_num_2: 3
+  poly_embedding_dim: 128
+  z_dim: 16
+  sqrt_embedding_dim: 11.31  # 论文配置近似值（sqrt(128)≈11.3137）
+  logit_clipping: 10.0
+  eval_type: "argmax"
+
+trainer_params:
+  train_data_path: "results/l2seg_dataset/l2seg_training_data.pt"
+  checkpoint_dir: "results/l2seg_dataset/checkpoints"
+  metrics_csv: "results/l2seg_dataset/train_metrics.csv"
+
+  epochs: 200
+  learning_rate: 0.0001
+  # 论文 D.3: batch size = 128（如显存不足可在本地下调）
+  batch_size: 128
+  shuffle: true
+  num_workers: 0
+
+  grad_clip_norm: 1.0
+  # 任务级损失系数（仓库实现）
+  nar_loss_weight: 1.0
+  nar_pos_weight: 9.0
+  ar_loss_weight: 1.0
+  # 论文 D.3: AR 序列级加权，wdelete=0.2, winsert=0.8
+  ar_delete_weight: 0.2
+  ar_insert_weight: 0.8
+  checkpoint_every: 1

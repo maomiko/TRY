@@ -10,7 +10,6 @@ import csv
 import pickle
 from logging import getLogger
 from typing import List, Dict, Any, Tuple, Optional
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
 import torch
@@ -174,7 +173,7 @@ class Search:
         for model_config in self.tester_params["model_load"]:
             checkpoint_path = "{path}/checkpoint-{epoch}.pt".format(**model_config)
             checkpoint = torch.load(
-                checkpoint_path, map_location=self.device, weights_only=False
+                checkpoint_path, map_location=self.device, weights_only=True
             )
             model_params = checkpoint["model_params"]
 
@@ -240,37 +239,20 @@ class Search:
             num_processes = 1
 
         if num_processes > 1:
-            # 开启进程池并发
-            with ThreadPoolExecutor(max_workers=num_processes) as executor:
-                # 将所有图的任务同时扔进池子里
-                futures = {
-                    executor.submit(self._solve_one_instance, idx): idx 
-                    for idx in range(total_instances)
-                }
-                
-                # 哪个核心先跑完，就先处理哪个的结果
-                for future in as_completed(futures):
-                    instance_idx = futures[future]
-                    try:
-                        result = future.result()
-                        # 更新指标
-                        metrics["costs"].update(result["cost"], 1)
-                        metrics["runtime"].update(result["runtime"], 1)
-                        metrics["iterations"].update(result["nb_iterations"], 1)
-                        
-                        self._log_instance_progress(instance_idx, total_instances, result, metrics)
-                        self._save_instance_results(instance_idx, result)
-                    except Exception as e:
-                        self.logger.error(f"实例 {instance_idx} 发生崩溃: {str(e)}")
-        else:
-            # 降级方案：如果是单核配置，依然串行跑
-            for instance_idx in range(total_instances):
-                result = self._solve_one_instance(instance_idx)
-                metrics["costs"].update(result["cost"], 1)
-                metrics["runtime"].update(result["runtime"], 1)
-                metrics["iterations"].update(result["nb_iterations"], 1)
-                self._log_instance_progress(instance_idx, total_instances, result, metrics)
-                self._save_instance_results(instance_idx, result)
+            self.logger.warning(
+                "num_processes > 1 is not supported safely in current Search implementation "
+                "because _solve_one_instance mutates shared instance state; forcing single-process mode."
+            )
+            num_processes = 1
+
+        # 单核串行执行（避免共享状态竞态）
+        for instance_idx in range(total_instances):
+            result = self._solve_one_instance(instance_idx)
+            metrics["costs"].update(result["cost"], 1)
+            metrics["runtime"].update(result["runtime"], 1)
+            metrics["iterations"].update(result["nb_iterations"], 1)
+            self._log_instance_progress(instance_idx, total_instances, result, metrics)
+            self._save_instance_results(instance_idx, result)
 
         # Log final summary
         self._log_final_summary(metrics)
@@ -283,8 +265,14 @@ class Search:
         if not self.training_data_buffer:
             self.logger.info("未收集到任何有效的标签数据。")
             return
-            
-        save_path = os.path.join(self.result_folder, "l2seg_training_data.pt")
+
+        save_path = self.tester_params.get(
+            "l2s_data_save_path",
+            os.path.join(self.result_folder, "l2seg_training_data.pt"),
+        )
+        save_dir = os.path.dirname(save_path)
+        if save_dir:
+            os.makedirs(save_dir, exist_ok=True)
         torch.save(self.training_data_buffer, save_path)
         self.logger.info(f"成功保存 {len(self.training_data_buffer)} 条训练数据至 {save_path}")
 
@@ -741,9 +729,9 @@ class Search:
         
         # 直接使用传入的 reset_state，保护 SA 现场不被破坏！
 
-        # 论文推荐的超参数
-        eta = 0.6            # NAR 判定不稳定的阈值
-        n_kmeans = 3         # 聚类簇的数量
+        # 论文推荐超参数（支持通过 tester_params 覆盖）
+        eta = float(self.tester_params.get("nar_threshold", 0.6))
+        n_kmeans = int(self.tester_params.get("n_kmeans", 3))
         
         with torch.no_grad():
 
@@ -784,7 +772,7 @@ class Search:
             
             # 防止候选点数量比预设的 K 还少
             actual_k = min(n_kmeans, len(unstable_candidates))
-            kmeans = KMeans(n_clusters=actual_k, random_state=42, n_init='auto')
+            kmeans = KMeans(n_clusters=actual_k, random_state=self.seed, n_init='auto')
             cluster_labels = kmeans.fit_predict(candidate_coords)
             
             initial_nodes = []
