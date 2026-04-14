@@ -15,7 +15,7 @@ def load_config(yaml_path):
 def main():
     parser = argparse.ArgumentParser(description="L2Seg 25-Dim Evaluation & Data Collection Entry")
     # 允许通过命令行指定配置文件
-    parser.add_argument('--config', type=str, default='configs/eval/cvrp100.yaml', help='Path to yaml config file')
+    parser.add_argument('--config', type=str, default='configs/reproduce/label_gen_cvrp100.yaml', help='Path to yaml config file')
     parser.add_argument('--seed', type=int, default=1234, help='Random seed for reproducibility')
     args = parser.parse_args()
 
