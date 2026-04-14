@@ -670,7 +670,7 @@ class FSTA_Compressor:
                         vehicles=retry_vehicles,
                         max_candidates=retry_max_candidates,
                     )
-                    retry_timeout = max(self.timeout_sec * 2, 90)
+                    retry_timeout = max(self.timeout_sec * 2, self.timeout_sec + 30)
                     retry_result = self._run_lkh_once(par_path, timeout_sec=retry_timeout)
                     if retry_result.returncode == 0:
                         retry_tour = self._parse_tour(out_path)
