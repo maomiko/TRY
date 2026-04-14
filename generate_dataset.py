@@ -41,6 +41,7 @@ if __name__ == "__main__":
     os.makedirs(opts.data_dir, exist_ok=True)
 
     def progress_callback(done, total):
+        """Print dataset generation progress where done is completed instances and total is target size."""
         if opts.progress_interval > 0 and (
             done == 1 or done == total or done % opts.progress_interval == 0
         ):
@@ -133,4 +134,3 @@ if __name__ == "__main__":
 
     else:
         raise ValueError(f"Problem {opts.problem} not supported")
-
