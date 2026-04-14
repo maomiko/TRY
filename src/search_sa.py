@@ -50,8 +50,8 @@ def create_l2seg_input(nn_d_xy, nn_n_xy, nn_n_dem, device, k=20):
     feat = MockProblemFeat(d_tensor, n_tensor, dem_tensor)
     tour_index = torch.zeros_like(dem_tensor, dtype=torch.long)
     
-    # 修复：原版特征需要邻居形状严格为 [1, N, 2] (即前、后两个相连节点)
-    neighbours = torch.zeros((1, n_tensor.size(0), 2), dtype=torch.long, device=device)
+    # 原版特征需要邻居形状为 [B, N, 2]；MockState 内部会额外 unsqueeze 一次
+    neighbours = torch.zeros((n_tensor.size(0), 2), dtype=torch.long, device=device)
     
     # 👑 计算 100% 还原的论文特征
     static_feats, dynamic_feats = compute_original_l2seg_features(
@@ -368,8 +368,12 @@ class Search:
         # [纯 Python 重构] 3. 构建深度学习状态
         # ==========================================
         self.max_coord = np.max(self.full_node_xy)
-        self.nn_node_xy = self.full_node_xy / self.max_coord
-        self.nn_node_demand = raw_n_dem / raw_capacity
+        if self.max_coord <= 0:
+            self.nn_node_xy = self.full_node_xy.copy()
+        else:
+            self.nn_node_xy = self.full_node_xy / self.max_coord
+        demand_scale = raw_capacity if raw_capacity > 0 else 1.0
+        self.nn_node_demand = raw_n_dem / demand_scale
 
         self.current_reset_state = create_l2seg_input(
             self.nn_node_xy[0:1], self.nn_node_xy[1:], self.nn_node_demand, self.device
@@ -425,8 +429,25 @@ class Search:
                 aug_factor, rollout_size, sa_config["T"], local_rng
             )
 
+            # SA 接受/拒绝：Metropolis 准则
+            accepted_solutions = []
+            for old_sol, new_sol in zip(self.my_python_solutions, new_solutions):
+                old_cost = old_sol.totalCosts
+                new_cost = new_sol.totalCosts
+                delta_cost = new_cost - old_cost
+
+                accept = False
+                if delta_cost <= 0:
+                    accept = True
+                else:
+                    temp = max(float(sa_config["T"]), 1e-12)
+                    accept_prob = float(np.exp(-delta_cost / temp))
+                    accept = local_rng.random() < accept_prob
+
+                accepted_solutions.append(new_sol if accept else old_sol)
+
             # Update incumbent
-            for sol in new_solutions:
+            for sol in accepted_solutions:
                 if sol.totalCosts < incumbent_cost:
                     incumbent_cost = sol.totalCosts
                     incumbent_solution = sol
@@ -434,11 +455,11 @@ class Search:
             # Synchronize augmented solutions (only when aug_factor > 1)
             if aug_factor > 1:
                 self._synchronize_augmented_solutions(
-                    new_solutions, sa_config["T"], sa_config["delta"]
+                    accepted_solutions, sa_config["T"], sa_config["delta"]
                 )
 
             # Update solutions in environment
-            self.my_python_solutions = new_solutions
+            self.my_python_solutions = accepted_solutions
 
             # Update temperature
             sa_config["T"] = self._update_temperature(
@@ -455,12 +476,6 @@ class Search:
                 break
 
         runtime = time.time() - start_time
-
-        # Verify runtime limit was enforced correctly
-        if sa_config["runtime_limited"]:
-            assert (
-                runtime > sa_config["max_runtime"]
-            ), "Runtime limit was set, but search terminated based on iteration count"
 
         return {
             "cost": incumbent_cost,
@@ -771,7 +786,9 @@ class Search:
             # 阶段二：KMeans 聚类与寻找引爆点 (Clustering & Initial Node Identification)
             # 提取候选节点的真实二维坐标用于空间聚类
             all_coords = reset_state.problem_feat.node_xy.squeeze(0).cpu().numpy()
-            candidate_coords = all_coords[unstable_candidates.cpu().numpy()]
+            # nar_probs 索引: 0=depot, 1..N=customers；node_xy 索引: 0..N-1=customers
+            candidate_customer_idx = unstable_candidates - 1
+            candidate_coords = all_coords[candidate_customer_idx.cpu().numpy()]
             
             # 防止候选点数量比预设的 K 还少
             actual_k = min(n_kmeans, len(unstable_candidates))

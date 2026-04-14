@@ -11,8 +11,8 @@ def load_cvrplib_instance(filepath):
         lines = f.readlines()
         
     capacity = 0
-    node_coords = []
-    demands = []
+    node_coords = {}
+    demands = {}
     
     section = None
     for line in lines:
@@ -36,18 +36,40 @@ def load_cvrplib_instance(filepath):
             
         if section == "COORD":
             parts = line.split()
-            node_coords.append([float(parts[1]), float(parts[2])])
+            if len(parts) < 3:
+                continue
+            node_id = int(parts[0])
+            node_coords[node_id] = [float(parts[1]), float(parts[2])]
         elif section == "DEMAND":
             parts = line.split()
-            demands.append(int(parts[1]))
+            if len(parts) < 2:
+                continue
+            node_id = int(parts[0])
+            demands[node_id] = int(parts[1])
         elif section == "DEPOT":
             if line == "-1": break
 
-    # 转化为 Numpy 数组并分离车场与客户
-    nodes = np.array(node_coords)
-    depot_xy = nodes[0:1]  # 索引 0 是车场
-    node_xy = nodes[1:]    # 索引 1 之后是客户
-    node_demand = np.array(demands[1:])
+    if capacity <= 0:
+        raise ValueError(f"Invalid CAPACITY in {filepath}: {capacity}")
+    if not node_coords or not demands:
+        raise ValueError(f"Missing NODE_COORD_SECTION or DEMAND_SECTION in {filepath}")
+    if set(node_coords.keys()) != set(demands.keys()):
+        raise ValueError(f"Coordinate/Demand node-id mismatch in {filepath}")
+
+    # 按节点 ID 排序，确保坐标与需求对齐；假定 depot 为最小 ID（CVRPLIB 常规为 1）
+    ordered_ids = sorted(node_coords.keys())
+    nodes = np.array([node_coords[nid] for nid in ordered_ids], dtype=np.float32)
+    ordered_demands = np.array([demands[nid] for nid in ordered_ids], dtype=np.float32)
+
+    depot_xy = nodes[0:1]
+    node_xy = nodes[1:]
+    node_demand = ordered_demands[1:]
+
+    if node_xy.shape[0] != node_demand.shape[0]:
+        raise ValueError(
+            f"Node count mismatch after parsing {filepath}: "
+            f"node_xy={node_xy.shape[0]}, node_demand={node_demand.shape[0]}"
+        )
     
     return depot_xy, node_xy, node_demand, capacity
 
