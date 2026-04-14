@@ -325,16 +325,89 @@ class FSTA_Compressor:
 
         return repaired_dist, repaired_demands
 
+    def _extract_expected_customers_from_tours(self, tours: List[List[int]]) -> List[int]:
+        max_customer_id = len(self.node_xy) - 1
+        ordered = []
+        seen = set()
+        for route in tours:
+            for node in route:
+                nid = int(node)
+                if nid <= 0 or nid > max_customer_id:
+                    continue
+                if nid in seen:
+                    continue
+                seen.add(nid)
+                ordered.append(nid)
+        return ordered
+
+    @staticmethod
+    def _is_valid_flat_tour(flat_tour: List[int], expected_customers: List[int]) -> bool:
+        if not expected_customers:
+            return False
+        expected = set(int(x) for x in expected_customers)
+        seen = set()
+        for node in flat_tour:
+            nid = int(node)
+            if nid == 0:
+                continue
+            if nid not in expected:
+                return False
+            if nid in seen:
+                return False
+            seen.add(nid)
+        return seen == expected
+
+    @staticmethod
+    def _validate_lkh_inputs(
+        n: int,
+        distances: np.ndarray,
+        demands: np.ndarray,
+        fixed_edges: List[Tuple[int, int]],
+        vehicles: int,
+        capacity: int,
+    ) -> bool:
+        if n <= 1:
+            return False
+        if capacity <= 0:
+            return False
+        if distances.shape != (n, n):
+            return False
+        if demands.shape != (n,):
+            return False
+        if not np.isfinite(distances).all() or not np.isfinite(demands).all():
+            return False
+        if (distances < 0).any() or (demands < 0).any():
+            return False
+        if not np.all(np.diag(distances) == 0):
+            return False
+        if int(demands[0]) != 0:
+            return False
+        if vehicles < 1 or vehicles > (n - 1):
+            return False
+
+        for u, v in fixed_edges:
+            ui, vi = int(u), int(v)
+            if ui < 1 or ui > n or vi < 1 or vi > n or ui == vi:
+                return False
+        return True
+
     def run_fsta_reoptimization(self, tours: List[List[int]], destroyed_nodes: Set[int]):
         """
         步骤 2 & 3：图压缩与 LKH 求解 (严密对齐 Appendix B.1.5)
         """
+        expected_customers = self._extract_expected_customers_from_tours(tours)
+
         def _fallback_tour(tours: List[List[int]]) -> List[int]:
             flat = []
+            max_customer_id = len(self.node_xy) - 1
             for route in tours:
                 if not route:
                     continue
-                flat.extend(route)
+                flat.extend(
+                    int(n)
+                    for n in route
+                    if 0 < int(n) <= max_customer_id
+                )
                 flat.append(0)
             if flat:
                 flat.pop()
@@ -429,8 +502,6 @@ class FSTA_Compressor:
         out_path = os.path.join(temp_dir, f"fsta_output_{run_id}.tour")
 
         try:
-            self._write_explicit_vrp(vrp_path, num_new_nodes, distances, demands, fixed_edges_lkh)
-
             # 👑 完美动态车辆分配：既满足最低运力，又不超过节点数和最大限制
             max_feasible_vehicles = max(1, num_new_nodes - 1)
             safe_vehicles = max(min_required_vehicles, min(self.max_vehicles, max_feasible_vehicles))
@@ -438,6 +509,19 @@ class FSTA_Compressor:
                 f"safe_vehicles ({safe_vehicles}) exceeded "
                 f"max_feasible_vehicles ({max_feasible_vehicles})"
             )
+
+            if not self._validate_lkh_inputs(
+                n=num_new_nodes,
+                distances=distances,
+                demands=demands,
+                fixed_edges=fixed_edges_lkh,
+                vehicles=safe_vehicles,
+                capacity=self.capacity,
+            ):
+                print("[LKH trace] invalid reduced instance detected before LKH call; fallback applied.")
+                return _fallback_tour(tours)
+
+            self._write_explicit_vrp(vrp_path, num_new_nodes, distances, demands, fixed_edges_lkh)
             self._write_par(par_path, vrp_path, out_path, vehicles=safe_vehicles)
             run_command = [self.lkh_path, par_path]
             self._log_lkh_context(
@@ -483,7 +567,16 @@ class FSTA_Compressor:
 
             # 5. 读取与无损解码
             lkh_tour_new = self._parse_tour(out_path)
-            return self._recover_solution(lkh_tour_new, new_to_global, segments)
+            if not lkh_tour_new:
+                print("[LKH trace] empty/invalid TOUR_FILE content; fallback applied.")
+                return _fallback_tour(tours)
+
+            recovered = self._recover_solution(lkh_tour_new, new_to_global, segments)
+            if not self._is_valid_flat_tour(recovered, expected_customers):
+                print("[LKH trace] recovered tour failed validation; fallback applied.")
+                return _fallback_tour(tours)
+
+            return recovered
 
         except subprocess.TimeoutExpired as e:
             print("\n" + "!"*60)
@@ -617,7 +710,12 @@ class FSTA_Compressor:
                 for line in lines:
                     if "TOUR_SECTION" in line: in_tour = True; continue
                     if "-1" in line or "EOF" in line: in_tour = False; continue
-                    if in_tour: tour.append(int(line.strip()))
+                    if in_tour:
+                        for token in line.split():
+                            try:
+                                tour.append(int(token))
+                            except ValueError:
+                                continue
         return tour
     
     # 👑 接收我们传进来的 vehicles
