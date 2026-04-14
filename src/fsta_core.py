@@ -165,8 +165,8 @@ class FSTA_Compressor:
         return segments
 
     @staticmethod
-    def _returncode_hex(returncode: int) -> str:
-        """Convert signed process return codes to Windows-style unsigned 32-bit hex when needed."""
+    def _format_returncode_as_hex(returncode: int) -> str:
+        """Format return code as hex; negative values are mapped to unsigned 32-bit form (common on Windows)."""
         if returncode < 0:
             return hex((1 << 32) + returncode)
         return hex(returncode)
@@ -231,7 +231,7 @@ class FSTA_Compressor:
 
         print("\n" + "=" * 80)
         print("[LKH trace] process result")
-        print(f"returncode: {returncode} ({self._returncode_hex(returncode)})")
+        print(f"returncode: {returncode} ({self._format_returncode_as_hex(returncode)})")
         print(f"classification: {classification}")
 
         stdout_head, stdout_tail = self._extract_head_tail_lines(stdout, line_count=50)
