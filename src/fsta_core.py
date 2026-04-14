@@ -4,6 +4,8 @@ import tempfile
 import subprocess
 import time
 import uuid   
+import tarfile
+from pathlib import Path
 from typing import List, Set, Tuple, Dict
 
 class FSTA_Compressor:
@@ -22,9 +24,107 @@ class FSTA_Compressor:
         self.node_xy = node_xy
         self.node_demand = node_demand
         self.capacity = capacity
-        self.lkh_path = lkh_path
+        self.lkh_path = self._resolve_lkh_path(lkh_path)
         self.max_vehicles = max_vehicles
         self.timeout_sec = max(1, int(timeout_sec))
+
+    def _resolve_lkh_path(self, lkh_path: str) -> str:
+        """Resolve LKH executable path; auto-bootstrap from .tgz source archive on Linux."""
+        repo_root = Path(__file__).resolve().parent.parent
+
+        def _as_abs(path_str: str) -> Path:
+            p = Path(path_str)
+            if not p.is_absolute():
+                p = repo_root / p
+            return p
+
+        def _make_executable(path: Path) -> bool:
+            try:
+                if path.exists() and path.is_file():
+                    path.chmod(path.stat().st_mode | 0o111)
+                return path.exists() and path.is_file() and os.access(path, os.X_OK)
+            except OSError:
+                return False
+
+        def _probe_candidate(path: Path):
+            if path.is_file():
+                if path.suffix.lower() in {".tgz", ".gz"}:
+                    return None
+                if _make_executable(path):
+                    return path
+                return None
+            if path.is_dir():
+                for name in ("LKH", "LKH-3", "LKH.exe", "LKH-3.exe"):
+                    candidate = path / name
+                    if _make_executable(candidate):
+                        return candidate
+            return None
+
+        configured = _as_abs(lkh_path) if lkh_path else None
+        candidates = []
+        if configured is not None:
+            candidates.append(configured)
+
+        candidates.extend(
+            [
+                repo_root / "LKH",
+                repo_root / "LKH-3",
+                repo_root / "LKH-3.exe",
+                repo_root / "LKH-3.0.14" / "LKH",
+                repo_root / "LKH-3.0.14",
+            ]
+        )
+
+        for candidate in candidates:
+            hit = _probe_candidate(candidate)
+            if hit is not None:
+                return str(hit)
+
+        archive_candidates = []
+        if configured is not None and configured.is_file():
+            if configured.suffix.lower() == ".tgz" or configured.name.endswith(".tar.gz"):
+                archive_candidates.append(configured)
+        archive_candidates.append(repo_root / "LKH-3.0.14.tgz")
+
+        for archive_path in archive_candidates:
+            built = self._build_lkh_from_archive(archive_path, _probe_candidate)
+            if built is not None:
+                return str(built)
+
+        return lkh_path
+
+    def _build_lkh_from_archive(self, archive_path: Path, probe_candidate):
+        if not archive_path.exists() or not archive_path.is_file():
+            return None
+
+        target_root = archive_path.parent
+        extracted_dir = target_root / archive_path.name.replace(".tar.gz", "").replace(".tgz", "")
+
+        try:
+            if not extracted_dir.exists():
+                with tarfile.open(archive_path, "r:gz") as tar:
+                    target_root_real = target_root.resolve()
+                    for member in tar.getmembers():
+                        member_target = (target_root / member.name).resolve()
+                        if not str(member_target).startswith(str(target_root_real) + os.sep):
+                            raise RuntimeError(f"Unsafe tar member path: {member.name}")
+                    tar.extractall(path=target_root)
+
+            built = probe_candidate(extracted_dir)
+            if built is not None:
+                return built
+
+            subprocess.run(
+                ["make"],
+                cwd=str(extracted_dir),
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            return probe_candidate(extracted_dir)
+        except (tarfile.TarError, OSError, subprocess.SubprocessError, RuntimeError):
+            return None
 
     def _extract_segments(self, tours: List[List[int]], destroyed_nodes: Set[int]) -> List[List[int]]:
         """
