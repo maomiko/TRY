@@ -40,9 +40,9 @@ class FSTA_Compressor:
         """
         步骤 2 & 3：图压缩与 LKH 求解 (严密对齐 Appendix B.1.5)
         """
-        def _fallback_tour(input_tours: List[List[int]]) -> List[int]:
+        def _fallback_tour(tours: List[List[int]]) -> List[int]:
             flat = []
-            for route in input_tours:
+            for route in tours:
                 if not route:
                     continue
                 flat.extend(route)
@@ -146,7 +146,10 @@ class FSTA_Compressor:
                 # 👑 完美动态车辆分配：既满足最低运力，又不超过节点数和最大限制
                 max_feasible_vehicles = max(1, num_new_nodes - 1)
                 safe_vehicles = max(min_required_vehicles, min(self.max_vehicles, max_feasible_vehicles))
-                assert safe_vehicles <= max_feasible_vehicles, "safe_vehicles exceeded feasible range"
+                assert safe_vehicles <= max_feasible_vehicles, (
+                    f"safe_vehicles ({safe_vehicles}) exceeded "
+                    f"max_feasible_vehicles ({max_feasible_vehicles})"
+                )
                 self._write_par(par_path, vrp_path, out_path, vehicles=safe_vehicles)
             
                 process_result = subprocess.run(
