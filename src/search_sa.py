@@ -692,7 +692,10 @@ class Search:
                 )
 
             # 论文 Algorithm 2 风格：R <- R+，不使用 SA 接受/降温逻辑
+            samples_before = len(self.training_data_buffer)
             new_solutions = self._perform_iteration(aug_factor, rollout_size, local_rng)
+            samples_after = len(self.training_data_buffer)
+            newly_generated = samples_after - samples_before
             self.my_python_solutions = new_solutions
 
             for sol in new_solutions:
@@ -701,6 +704,9 @@ class Search:
                     incumbent_solution = sol
 
             iteration += 1
+            self.logger.info(
+                f" 实例 {instance_idx} | 第 {iteration}/{max_iterations} 轮生成样本: +{newly_generated} | 累计: {samples_after}"
+            )
 
             # Check runtime limit
             if runtime_limited and (time.time() - start_time) > max_runtime:
