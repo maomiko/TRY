@@ -62,6 +62,8 @@ def _read_trainer_params(config):
         "nar_loss_weight": float(trainer_params.get("nar_loss_weight", 1.0)),
         "nar_pos_weight": float(nar_pos_weight),
         "ar_loss_weight": float(trainer_params.get("ar_loss_weight", 1.0)),
+        "ar_insert_weight": float(trainer_params.get("ar_insert_weight", 1.0)),
+        "ar_delete_weight": float(trainer_params.get("ar_delete_weight", 1.0)),
         "train_data_path": trainer_params.get("train_data_path", "results/l2seg_dataset/l2seg_training_data.pt"),
         "checkpoint_dir": trainer_params.get("checkpoint_dir", "results/l2seg_dataset/checkpoints"),
         "checkpoint_every": int(trainer_params.get("checkpoint_every", 1)),
@@ -100,7 +102,7 @@ def train(config_path, seed=1234):
     optimizer = optim.Adam(model.parameters(), lr=trainer_params["learning_rate"])
     nar_pos_weight = torch.tensor([trainer_params["nar_pos_weight"]], device=device)
     nar_criterion = nn.BCEWithLogitsLoss(pos_weight=nar_pos_weight)
-    ar_criterion = nn.CrossEntropyLoss(ignore_index=model.PAD_TOKEN)
+    ar_criterion = nn.CrossEntropyLoss(ignore_index=model.PAD_TOKEN, reduction="none")
 
     # 加载数据
     data_path = trainer_params["train_data_path"]
@@ -186,7 +188,22 @@ def train(config_path, seed=1234):
                 ar_input = ar_sequences[:, :-1]
                 ar_target = ar_sequences[:, 1:]
                 ar_logits = model.ar_forward(ar_input)
-                loss_ar = ar_criterion(ar_logits.reshape(-1, model.vocab_size), ar_target.reshape(-1))
+                flat_logits = ar_logits.reshape(-1, model.vocab_size)
+                flat_target = ar_target.reshape(-1)
+                token_losses = ar_criterion(flat_logits, flat_target).reshape_as(ar_target)
+
+                # 对 AR 序列按删除/插入阶段加权（论文: wdelete / winsert）
+                # 约定：target 第 0 位对应删除阶段，之后奇偶交替
+                ar_positions = torch.arange(ar_target.shape[1], device=device).unsqueeze(0)
+                token_weights = torch.where(
+                    (ar_positions % 2) == 0,
+                    torch.full_like(token_losses, trainer_params["ar_delete_weight"]),
+                    torch.full_like(token_losses, trainer_params["ar_insert_weight"]),
+                )
+                valid_mask = (ar_target != model.PAD_TOKEN).float()
+                weighted_losses = token_losses * token_weights * valid_mask
+                denom = valid_mask.sum().clamp_min(1.0)
+                loss_ar = weighted_losses.sum() / denom
 
                 # --- 汇总损失 ---
                 loss = trainer_params["nar_loss_weight"] * loss_nar + trainer_params["ar_loss_weight"] * loss_ar
