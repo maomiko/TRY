@@ -353,7 +353,7 @@ class Search:
         lkh_node_xy = self.full_node_xy.astype(np.float32)
         lkh_demand = np.concatenate(([0], raw_n_dem)).astype(np.int64)
         lkh_timeout_sec = int(self.tester_params.get("lkh_timeout_sec", 60))
-        lkh_path = self.tester_params.get("lkh_path", self.env_params.get("lkh_path", "./LKH-3.exe"))
+        lkh_path = self.tester_params.get("lkh_path", self.env_params.get("lkh_path", "./LKH-3"))
 
         self.fsta_compressor = FSTA_Compressor(
             node_xy=lkh_node_xy,

@@ -54,6 +54,19 @@ python eval.py --config configs/reproduce/label_gen_cvrp100.yaml --seed 1234
 
 说明：`eval.py` 默认配置已对齐为 `configs/reproduce/label_gen_cvrp100.yaml`。
 
+LKH 说明（Linux/macOS）：
+
+- 复现配置默认使用 `tester_params.lkh_path: "./LKH-3"`。
+- 若根目录仅有 `LKH-3.0.14.tgz`，代码会自动尝试编译并生成 `./LKH-3`。
+- 也可手动编译：
+
+```bash
+tar -xzf LKH-3.0.14.tgz
+make -C LKH-3.0.14 -j
+cp LKH-3.0.14/LKH ./LKH-3
+chmod +x ./LKH-3
+```
+
 期望输出：
 
 - `results/l2seg_dataset/l2seg_training_data.pt`

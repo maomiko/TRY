@@ -4,6 +4,8 @@ import tempfile
 import subprocess
 import time
 import uuid   
+import shutil
+import stat
 from typing import List, Set, Tuple, Dict
 
 class FSTA_Compressor:
@@ -15,16 +17,120 @@ class FSTA_Compressor:
         node_xy: np.ndarray,
         node_demand: np.ndarray,
         capacity: int,
-        lkh_path: str = "./LKH-3.exe",
+        lkh_path: str = "./LKH-3",
         max_vehicles: int = 50,
         timeout_sec: int = 15,
     ):
         self.node_xy = node_xy
         self.node_demand = node_demand
         self.capacity = capacity
-        self.lkh_path = lkh_path
+        self.lkh_path = self._resolve_lkh_path(lkh_path)
         self.max_vehicles = max_vehicles
         self.timeout_sec = max(1, int(timeout_sec))
+
+    def _is_windows_exe(self, path: str) -> bool:
+        return path.lower().endswith(".exe")
+
+    def _can_execute(self, path: str) -> bool:
+        if not os.path.isfile(path):
+            return False
+        if os.name == "nt":
+            return True
+        return os.access(path, os.X_OK)
+
+    def _try_mark_executable(self, path: str) -> None:
+        if os.name == "nt" or not os.path.exists(path):
+            return
+        current_mode = os.stat(path).st_mode
+        os.chmod(path, current_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+    def _try_build_lkh_from_archive(self, repo_root: str) -> str:
+        archive_path = os.path.join(repo_root, "LKH-3.0.14.tgz")
+        target_binary = os.path.join(repo_root, "LKH-3")
+        if self._can_execute(target_binary):
+            return target_binary
+        if not os.path.exists(archive_path):
+            return ""
+
+        build_dir = tempfile.mkdtemp(prefix="lkh_build_")
+        try:
+            subprocess.run(
+                ["tar", "-xzf", archive_path, "-C", build_dir],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            src_root = os.path.join(build_dir, "LKH-3.0.14")
+            subprocess.run(
+                ["make", "-C", src_root, "-j"],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+            built_binary = os.path.join(src_root, "LKH")
+            if not os.path.exists(built_binary):
+                return ""
+            shutil.copy2(built_binary, target_binary)
+            self._try_mark_executable(target_binary)
+            return target_binary if self._can_execute(target_binary) else ""
+        except Exception:
+            return ""
+        finally:
+            shutil.rmtree(build_dir, ignore_errors=True)
+
+    def _resolve_lkh_path(self, configured_path: str) -> str:
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
+        raw_candidates = []
+        if configured_path:
+            raw_candidates.append(configured_path)
+        raw_candidates.extend(["./LKH-3", "./LKH-3.exe", "./LKH"])
+
+        which_lkh = shutil.which("LKH")
+        which_lkh3 = shutil.which("LKH-3")
+        if which_lkh:
+            raw_candidates.append(which_lkh)
+        if which_lkh3:
+            raw_candidates.append(which_lkh3)
+
+        candidates = []
+        seen = set()
+        for c in raw_candidates:
+            if not c:
+                continue
+            candidate = c
+            if not os.path.isabs(candidate):
+                candidate = os.path.abspath(os.path.join(repo_root, candidate))
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            candidates.append(candidate)
+
+        for candidate in candidates:
+            if os.name != "nt" and self._is_windows_exe(candidate):
+                continue
+            if os.path.exists(candidate):
+                self._try_mark_executable(candidate)
+            if self._can_execute(candidate):
+                return candidate
+
+        if os.name != "nt":
+            built_path = self._try_build_lkh_from_archive(repo_root)
+            if built_path:
+                return built_path
+
+        if os.name != "nt":
+            raise RuntimeError(
+                "No usable LKH binary found. On Linux/macOS, provide tester_params.lkh_path "
+                "pointing to a native executable (e.g. ./LKH-3), or keep LKH-3.0.14.tgz in "
+                "repository root for auto-build."
+            )
+
+        raise RuntimeError(
+            "No usable LKH binary found. On Windows, set tester_params.lkh_path to LKH-3.exe."
+        )
 
     def _extract_segments(self, tours: List[List[int]], destroyed_nodes: Set[int]) -> List[List[int]]:
         """
@@ -142,69 +248,50 @@ class FSTA_Compressor:
 
         try:
             self._write_explicit_vrp(vrp_path, num_new_nodes, distances, demands, fixed_edges_lkh)
-            self._write_par(par_path, vrp_path, out_path)
-            
-            # 👑 核心修复 1：动态分配车辆！最多 50 辆，但绝不能超过当前图的客户总数！
-            safe_vehicles = min(self.max_vehicles, num_new_nodes - 1)
+
+            # 👑 完美动态车辆分配：既满足最低运力，又不超过节点数和最大限制
+            max_feasible_vehicles = max(1, num_new_nodes - 1)
+            safe_vehicles = max(min_required_vehicles, min(self.max_vehicles, max_feasible_vehicles))
+            assert safe_vehicles <= max_feasible_vehicles, (
+                f"safe_vehicles ({safe_vehicles}) exceeded "
+                f"max_feasible_vehicles ({max_feasible_vehicles})"
+            )
             self._write_par(par_path, vrp_path, out_path, vehicles=safe_vehicles)
 
+            process_result = subprocess.run(
+                [self.lkh_path, par_path],
+                capture_output=True,
+                text=True,
+                timeout=self.timeout_sec
+            )
 
-            try:
-                self._write_explicit_vrp(vrp_path, num_new_nodes, distances, demands, fixed_edges_lkh)
-            
-                # 👑 完美动态车辆分配：既满足最低运力，又不超过节点数和最大限制
-                max_feasible_vehicles = max(1, num_new_nodes - 1)
-                safe_vehicles = max(min_required_vehicles, min(self.max_vehicles, max_feasible_vehicles))
-                assert safe_vehicles <= max_feasible_vehicles, (
-                    f"safe_vehicles ({safe_vehicles}) exceeded "
-                    f"max_feasible_vehicles ({max_feasible_vehicles})"
-                )
-                self._write_par(par_path, vrp_path, out_path, vehicles=safe_vehicles)
-            
-                process_result = subprocess.run(
-                    [self.lkh_path, par_path],
-                    capture_output=True,
-                    text=True,
-                    timeout=self.timeout_sec
-                )
-            
-                # 👑 核心防御：如果 LKH 底层崩溃，绝对不能交白卷！必须触发平滑回退
-                if process_result.returncode != 0:
-                    print("\n" + "="*60)
-                    print(f"💀 LKH-3 引擎发生底层崩溃！已成功拦截，正在平滑回退。")
-                    print(f"👉 错误原因 (STDERR): {process_result.stderr}")
-                    print("="*60 + "\n")
-                
-                    return _fallback_tour(tours)
-                
-                # 5. 读取与无损解码
-                lkh_tour_new = self._parse_tour(out_path)
-                return self._recover_solution(lkh_tour_new, new_to_global, segments)
-        
-            except subprocess.TimeoutExpired as e:
-                print("\n" + "!"*60)
-                print(f"LKH-3 陷入死循环，已被 Python 强制狙击！")
-                print(f"让我们看看它死前到底卡在哪一步了：")
-                # e.stdout 里面保存了 LKH-3 运行到一半被杀时的所有控制台输出！
-                print(f"{e.stdout}")
-                print(f"顺便检查一下容量参数对不对：Capacity = {self.capacity}")
-                print("!"*60 + "\n")
-                
-
-                # 👑 核心修复 2：回退时，必须把二维的 tours 拍平成一维（用 0 隔开），无缝喂给外面的代码！
-                return _fallback_tour(tours)
-            except (FileNotFoundError, PermissionError, OSError) as e:
+            # 👑 核心防御：如果 LKH 底层崩溃，绝对不能交白卷！必须触发平滑回退
+            if process_result.returncode != 0:
                 print("\n" + "="*60)
-                print("💀 LKH-3 不可执行或缺失，已成功拦截，正在平滑回退。")
-                print(f"👉 错误原因: {e}")
-                print(f"👉 当前 LKH 路径: {self.lkh_path}")
+                print("💀 LKH-3 引擎发生底层崩溃！已成功拦截，正在平滑回退。")
+                print(f"👉 错误原因 (STDERR): {process_result.stderr}")
                 print("="*60 + "\n")
                 return _fallback_tour(tours)
 
-
-                
+            # 5. 读取与无损解码
             lkh_tour_new = self._parse_tour(out_path)
             return self._recover_solution(lkh_tour_new, new_to_global, segments)
+
+        except subprocess.TimeoutExpired as e:
+            print("\n" + "!"*60)
+            print("LKH-3 陷入死循环，已被 Python 强制狙击！")
+            print("让我们看看它死前到底卡在哪一步了：")
+            print(f"{e.stdout}")
+            print(f"顺便检查一下容量参数对不对：Capacity = {self.capacity}")
+            print("!"*60 + "\n")
+            return _fallback_tour(tours)
+        except (FileNotFoundError, PermissionError, OSError) as e:
+            print("\n" + "="*60)
+            print("💀 LKH-3 不可执行或缺失，已成功拦截，正在平滑回退。")
+            print(f"👉 错误原因: {e}")
+            print(f"👉 当前 LKH 路径: {self.lkh_path}")
+            print("="*60 + "\n")
+            return _fallback_tour(tours)
             
         finally:
             # 👑 核心改造 2：无论成功还是报错，必须自动毁尸灭迹，防止硬盘撑爆！
