@@ -10,7 +10,7 @@ import copy
 import csv
 import pickle
 from logging import getLogger
-from typing import List, Dict, Any, Tuple, Optional
+from typing import List, Dict, Any, Tuple, Optional, Set
 
 import numpy as np
 import torch
@@ -502,6 +502,91 @@ class Search:
             return None
         return tours if tours else None
 
+    @staticmethod
+    def _flatten_tours(tours: List[List[int]]) -> List[int]:
+        return [int(node) for route in tours for node in route]
+
+    @staticmethod
+    def _rebuild_tours_with_template(flat_nodes: List[int], template_tours: List[List[int]]) -> List[List[int]]:
+        rebuilt = []
+        cursor = 0
+        for route in template_tours:
+            route_len = len(route)
+            rebuilt.append(flat_nodes[cursor : cursor + route_len])
+            cursor += route_len
+        return rebuilt
+
+    def _route_cost(self, route: List[int]) -> float:
+        if not route:
+            return 0.0
+        full = [0] + [int(n) for n in route] + [0]
+        cost = 0.0
+        for i in range(len(full) - 1):
+            cost += float(np.linalg.norm(self.full_node_xy[full[i]] - self.full_node_xy[full[i + 1]]))
+        return cost
+
+    def _two_opt_improve_route(self, route: List[int], max_passes: int = 2) -> List[int]:
+        if len(route) < 4:
+            return list(route)
+        best = list(route)
+        best_cost = self._route_cost(best)
+
+        for _ in range(max_passes):
+            improved = False
+            n = len(best)
+            for i in range(0, n - 2):
+                for j in range(i + 2, n):
+                    if i == 0 and j == n - 1:
+                        continue
+                    candidate = best[: i + 1] + best[i + 1 : j + 1][::-1] + best[j + 1 :]
+                    candidate_cost = self._route_cost(candidate)
+                    if candidate_cost + 1e-9 < best_cost:
+                        best = candidate
+                        best_cost = candidate_cost
+                        improved = True
+                        break
+                if improved:
+                    break
+            if not improved:
+                break
+        return best
+
+    def _python_repair_fallback(
+        self,
+        tours_before: List[List[int]],
+        destroyed_nodes: Set[int],
+        rng: random.Random,
+    ) -> List[List[int]]:
+        repaired = [list(route) for route in tours_before]
+        changed = False
+
+        for idx, route in enumerate(repaired):
+            if not route:
+                continue
+            if destroyed_nodes and not any(int(n) in destroyed_nodes for n in route):
+                continue
+            improved_route = self._two_opt_improve_route(route)
+            if improved_route != route:
+                repaired[idx] = improved_route
+                changed = True
+
+        if changed:
+            return repaired
+
+        flat_nodes = self._flatten_tours(tours_before)
+        if len(flat_nodes) < 2:
+            return repaired
+
+        candidate_positions = [i for i, node in enumerate(flat_nodes) if int(node) in destroyed_nodes]
+        if len(candidate_positions) < 2:
+            candidate_positions = list(range(len(flat_nodes)))
+        if len(candidate_positions) < 2:
+            return repaired
+
+        i, j = rng.sample(candidate_positions, 2)
+        flat_nodes[i], flat_nodes[j] = flat_nodes[j], flat_nodes[i]
+        return self._rebuild_tours_with_template(flat_nodes, tours_before)
+
     def _solve_one_instance(self, instance_idx: int) -> Dict[str, Any]:
         """
         Solve a single VRP instance using Simulated Annealing with learned destroy operations.
@@ -921,6 +1006,13 @@ class Search:
                     "Repaired tour invalid/empty; keeping previous feasible solution."
                 )
                 new_tours = copy.deepcopy(tours_before)
+
+            if new_tours == tours_before:
+                new_tours = self._python_repair_fallback(
+                    tours_before=tours_before,
+                    destroyed_nodes=set(flattened_nodes),
+                    rng=rng,
+                )
 
             # --- 更新解对象 ---
             # 这里非常关键：你需要使用你项目中更新路径的方法
