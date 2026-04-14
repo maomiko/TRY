@@ -172,15 +172,17 @@ class Search:
         if os.path.exists(lkh_path):
             return lkh_path
 
-        fallback = os.path.abspath("./LKH-3")
-        if os.path.exists(fallback):
-            self.logger.warning(
-                f"Configured lkh_path not found: {lkh_path}. Falling back to {fallback}."
-            )
-            return fallback
+        fallback_candidates = [os.path.abspath("./LKH-3"), os.path.abspath("./LKH-3.exe")]
+        for fallback in fallback_candidates:
+            if os.path.exists(fallback):
+                self.logger.warning(
+                    f"Configured lkh_path not found: {lkh_path}. Falling back to {fallback}."
+                )
+                return fallback
 
         raise FileNotFoundError(
-            f"LKH executable not found: configured={lkh_path}, fallback={fallback}. "
+            f"LKH executable not found: configured={lkh_path}, "
+            f"fallbacks={fallback_candidates}. "
             "Please set tester_params.lkh_path to a valid executable path."
         )
 
