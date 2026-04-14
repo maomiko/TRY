@@ -40,6 +40,17 @@ class FSTA_Compressor:
         """
         步骤 2 & 3：图压缩与 LKH 求解 (严密对齐 Appendix B.1.5)
         """
+        def _fallback_tour() -> List[int]:
+            flat = []
+            for route in tours:
+                if not route:
+                    continue
+                flat.extend(route)
+                flat.append(0)
+            if flat:
+                flat.pop()
+            return flat
+
         # 1. 提取所有 Segment
         segments = self._extract_segments(tours, destroyed_nodes)
         
@@ -62,6 +73,8 @@ class FSTA_Compressor:
         global_to_new = {g_id: n_id + 1 for n_id, g_id in enumerate(new_nodes)}
         new_to_global = {n_id + 1: g_id for n_id, g_id in enumerate(new_nodes)}
         num_new_nodes = len(new_nodes)
+        if num_new_nodes <= 1:
+            return _fallback_tour()
 
         # 3. 构建 LKH 需要的显式距离矩阵和需求表 (核心魔法)
         distances = np.zeros((num_new_nodes, num_new_nodes), dtype=int)
@@ -100,17 +113,13 @@ class FSTA_Compressor:
         # 👑 新增：防止过度压缩导致的“载货量悖论”
         # ==========================================
         total_demand = sum(demands)
-        min_required_vehicles = int(np.ceil(total_demand / self.capacity))
+        if self.capacity <= 0:
+            return _fallback_tour()
+        min_required_vehicles = max(1, int(np.ceil(total_demand / self.capacity)))
         
         if num_new_nodes - 1 < min_required_vehicles:
             # 如果节点被压缩得比必须派出的车辆数还少，这是物理无解的。直接放弃本次退火！
-            fallback_tour = []
-            for route in tours:
-                if not route: continue
-                fallback_tour.extend(route)
-                fallback_tour.append(0)
-            if fallback_tour: fallback_tour.pop()
-            return fallback_tour
+            return _fallback_tour()
 
         # 4. 写入临时目录并调用 LKH-3 (多进程安全版)
         temp_dir = "/dev/shm" if os.path.exists("/dev/shm") else tempfile.gettempdir()
@@ -135,7 +144,8 @@ class FSTA_Compressor:
                 self._write_explicit_vrp(vrp_path, num_new_nodes, distances, demands, fixed_edges_lkh)
             
                 # 👑 完美动态车辆分配：既满足最低运力，又不超过节点数和最大限制
-                safe_vehicles = max(min_required_vehicles, min(self.max_vehicles, num_new_nodes - 1))
+                max_feasible_vehicles = max(1, num_new_nodes - 1)
+                safe_vehicles = max(min_required_vehicles, min(self.max_vehicles, max_feasible_vehicles))
                 self._write_par(par_path, vrp_path, out_path, vehicles=safe_vehicles)
             
                 process_result = subprocess.run(
@@ -152,13 +162,7 @@ class FSTA_Compressor:
                     print(f"👉 错误原因 (STDERR): {process_result.stderr}")
                     print("="*60 + "\n")
                 
-                    fallback_tour = []
-                    for route in tours:
-                        if not route: continue
-                        fallback_tour.extend(route)
-                        fallback_tour.append(0)
-                    if fallback_tour: fallback_tour.pop()
-                    return fallback_tour
+                    return _fallback_tour()
                 
                 # 5. 读取与无损解码
                 lkh_tour_new = self._parse_tour(out_path)
@@ -175,13 +179,7 @@ class FSTA_Compressor:
                 
 
                 # 👑 核心修复 2：回退时，必须把二维的 tours 拍平成一维（用 0 隔开），无缝喂给外面的代码！
-                fallback_tour = []
-                for route in tours:
-                    fallback_tour.extend(route)
-                    fallback_tour.append(0) # 插入 0 代表回到车场
-                if fallback_tour:
-                    fallback_tour.pop() # 删掉最后一个多余的 0
-                return fallback_tour
+                return _fallback_tour()
 
 
                 
@@ -314,7 +312,7 @@ class FSTA_Compressor:
             f.write("RUNS = 1\nTIME_LIMIT = 10\nTRACE_LEVEL = 0\n")
             
             # 👑 突破“假车场黑洞”：视距必须穿透所有的假车场，再额外看到 5 个真实客户！
-            cands = vehicles + 5
+            cands = max(20, vehicles + 5)
             f.write(f"MAX_CANDIDATES = {cands}\n") 
             
-            f.write(f"VEHICLES = {vehicles}\n")
+            f.write(f"VEHICLES = {max(1, int(vehicles))}\n")
