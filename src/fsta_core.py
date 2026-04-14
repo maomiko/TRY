@@ -62,10 +62,11 @@ class FSTA_Compressor:
             )
             src_root = os.path.join(build_dir, "LKH-3.0.14")
             env_jobs = os.getenv("LKH_BUILD_JOBS")
+            cpu_limit = min(os.cpu_count() or 1, 8)
             try:
-                jobs = max(1, int(env_jobs)) if env_jobs is not None else max(1, min(os.cpu_count() or 1, 8))
+                jobs = max(1, int(env_jobs)) if env_jobs is not None else max(1, cpu_limit)
             except (TypeError, ValueError):
-                jobs = max(1, min(os.cpu_count() or 1, 8))
+                jobs = max(1, cpu_limit)
             subprocess.run(
                 ["make", "-C", src_root, f"-j{jobs}"],
                 check=True,
@@ -165,6 +166,7 @@ class FSTA_Compressor:
 
     @staticmethod
     def _returncode_hex(returncode: int) -> str:
+        """Convert signed process return codes to Windows-style unsigned 32-bit hex when needed."""
         if returncode < 0:
             return hex((1 << 32) + returncode)
         return hex(returncode)
