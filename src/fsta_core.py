@@ -7,6 +7,8 @@ import shutil
 import stat
 from typing import List, Set, Tuple, Dict
 
+UINT32_MOD = 1 << 32
+
 class FSTA_Compressor:
     """
     严谨对齐 L2Seg 论文的 First-Segment-Then-Aggregate 算法
@@ -168,7 +170,7 @@ class FSTA_Compressor:
     def _format_returncode_as_hex(returncode: int) -> str:
         """Format return code as hex; negative values are mapped to unsigned 32-bit form (common on Windows)."""
         if returncode < 0:
-            return hex((1 << 32) + returncode)
+            return hex(UINT32_MOD + returncode)
         return hex(returncode)
 
     def _classify_failure(self, returncode: int, stdout: str, stderr: str) -> str:
@@ -256,6 +258,12 @@ class FSTA_Compressor:
             text=True,
             timeout=self.timeout_sec,
         )
+
+    @staticmethod
+    def _calculate_retry_vehicles(
+        safe_vehicles: int, min_required_vehicles: int, max_feasible_vehicles: int
+    ) -> int:
+        return min(max_feasible_vehicles, max(safe_vehicles + 1, min_required_vehicles))
 
     def run_fsta_reoptimization(self, tours: List[List[int]], destroyed_nodes: Set[int]):
         """
@@ -384,7 +392,11 @@ class FSTA_Compressor:
                     process_result.stderr or "",
                 )
                 if classification == "data_or_parameter_error":
-                    retry_vehicles = min(max_feasible_vehicles, max(safe_vehicles + 1, min_required_vehicles))
+                    retry_vehicles = self._calculate_retry_vehicles(
+                        safe_vehicles=safe_vehicles,
+                        min_required_vehicles=min_required_vehicles,
+                        max_feasible_vehicles=max_feasible_vehicles,
+                    )
                     if retry_vehicles > safe_vehicles:
                         print(
                             f"[LKH trace] data/parameter-like failure detected, retry once with "
