@@ -81,7 +81,7 @@ class InstanceGenVRPTW:
         if not self.use_X_generator:
             raise ValueError("Uniform generation not supported for VRPTW")
 
-    def get_random_problems(self, batch_size, seed=None):
+    def get_random_problems(self, batch_size, seed=None, progress_callback=None):
         """
         Generate a batch of VRPTW instances using the X-generator.
 
@@ -123,6 +123,8 @@ class InstanceGenVRPTW:
             node_xy_np[i] = coords[1:]
             demand_np[i] = inst[1][1:]
             capacity_list.append(inst[2])
+            if progress_callback is not None:
+                progress_callback(i + 1, batch_size)
 
         # Convert numpy arrays to torch tensors and rescale coordinates
         depot_xy = torch.tensor(depot_xy_np, dtype=torch.float32) / GRID_SIZE
