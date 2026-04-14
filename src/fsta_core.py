@@ -13,6 +13,8 @@ WINDOWS_ACCESS_VIOLATION = -1073741819  # 0xC0000005
 WINDOWS_STACK_BUFFER_OVERRUN = -1073740791  # 0xC0000409
 WINDOWS_ACCESS_VIOLATION_U32 = 0xC0000005
 WINDOWS_STACK_BUFFER_OVERRUN_U32 = 0xC0000409
+MIN_MAX_CANDIDATES = 20
+MAX_CANDIDATES_BUFFER = 5
 
 class FSTA_Compressor:
     """
@@ -208,7 +210,7 @@ class FSTA_Compressor:
 
     @staticmethod
     def _recommended_max_candidates(vehicles: int) -> int:
-        return max(20, int(vehicles) + 5)
+        return max(MIN_MAX_CANDIDATES, int(vehicles) + MAX_CANDIDATES_BUFFER)
 
     @staticmethod
     def _extract_head_tail_lines(text: str, line_count: int = 50) -> Tuple[List[str], List[str]]:
