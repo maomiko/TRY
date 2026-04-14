@@ -432,6 +432,7 @@ class Search:
             )
 
             # SA 接受/拒绝：Metropolis 准则
+            current_temp = max(float(sa_config["T"]), MIN_SA_TEMPERATURE)
             accepted_solutions = []
             for old_sol, new_sol in zip(self.my_python_solutions, new_solutions):
                 old_cost = old_sol.totalCosts
@@ -442,8 +443,7 @@ class Search:
                 if delta_cost <= 0:
                     accept = True
                 else:
-                    temp = max(float(sa_config["T"]), MIN_SA_TEMPERATURE)
-                    accept_prob = float(np.exp(-delta_cost / temp))
+                    accept_prob = float(np.exp(-delta_cost / current_temp))
                     accept = local_rng.random() < accept_prob
 
                 accepted_solutions.append(new_sol if accept else old_sol)
