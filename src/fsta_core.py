@@ -5,7 +5,7 @@ import subprocess
 import uuid
 import shutil
 import stat
-from typing import List, Set, Tuple, Dict
+from typing import List, Set, Tuple, Dict, Optional
 
 UINT32_MODULUS = 1 << 32
 WINDOWS_ACCESS_VIOLATION = -1073741819  # 0xC0000005
@@ -189,7 +189,7 @@ class FSTA_Compressor:
             "infeasible",
             "not feasible",
             "parameter",
-            "problem_file",
+            "no candidates",
         )
         if any(k in msg for k in data_keywords):
             return "data_or_parameter_error"
@@ -267,6 +267,64 @@ class FSTA_Compressor:
     ) -> int:
         return min(max_feasible_vehicles, max(safe_vehicles + 1, min_required_vehicles))
 
+    @staticmethod
+    def _deduplicate_preserve_order(values: List[int]) -> List[int]:
+        seen = set()
+        deduped = []
+        for v in values:
+            iv = int(v)
+            if iv in seen:
+                continue
+            seen.add(iv)
+            deduped.append(iv)
+        return deduped
+
+    @staticmethod
+    def _sanitize_reduced_instance(
+        distances: np.ndarray,
+        demands: np.ndarray,
+        fixed_edges_lkh: List[Tuple[int, int]],
+    ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+        if distances.ndim != 2 or distances.shape[0] != distances.shape[1]:
+            return None
+        n = distances.shape[0]
+        if demands.ndim != 1 or demands.shape[0] != n:
+            return None
+        if n <= 1:
+            return None
+        if not np.isfinite(distances).all() or not np.isfinite(demands).all():
+            return None
+
+        repaired_dist = np.asarray(np.round(distances), dtype=np.int64)
+        repaired_demands = np.asarray(np.round(demands), dtype=np.int64)
+
+        # CVRP depot demand must be 0; customer demand must be non-negative.
+        repaired_demands = np.maximum(repaired_demands, 0)
+        repaired_demands[0] = 0
+
+        repaired_dist = np.maximum(repaired_dist, 0)
+        np.fill_diagonal(repaired_dist, 0)
+
+        fixed_zero_mask = np.zeros((n, n), dtype=bool)
+        for u, v in fixed_edges_lkh:
+            ui, vi = int(u) - 1, int(v) - 1
+            if 0 <= ui < n and 0 <= vi < n and ui != vi:
+                fixed_zero_mask[ui, vi] = True
+                fixed_zero_mask[vi, ui] = True
+
+        # Keep only fixed edges as zero-cost off-diagonal entries.
+        offdiag = ~np.eye(n, dtype=bool)
+        bad_zero = offdiag & (repaired_dist == 0) & (~fixed_zero_mask)
+        repaired_dist[bad_zero] = 1
+
+        # Ensure every customer node has at least one positive-cost candidate edge.
+        for i in range(1, n):
+            row_has_candidate = np.any(repaired_dist[i, np.arange(n) != i] > 0)
+            if not row_has_candidate:
+                return None
+
+        return repaired_dist, repaired_demands
+
     def run_fsta_reoptimization(self, tours: List[List[int]], destroyed_nodes: Set[int]):
         """
         步骤 2 & 3：图压缩与 LKH 求解 (严密对齐 Appendix B.1.5)
@@ -298,6 +356,9 @@ class FSTA_Compressor:
                 new_nodes.append(seg[0])   # 提取首节点
                 new_nodes.append(seg[-1])  # 提取尾节点
                 segment_endpoints.append((seg[0], seg[-1]))
+
+        # 可能同时出现在 destroyed_nodes 和 segment endpoint，需去重避免图结构异常。
+        new_nodes = self._deduplicate_preserve_order(new_nodes)
                 
         # 建立 全局ID <-> 新图ID 的双向映射
         # LKH 的索引要求从 1 开始
@@ -338,6 +399,11 @@ class FSTA_Compressor:
             distances[s_n - 1, e_n - 1] = 0
             distances[e_n - 1, s_n - 1] = 0
             fixed_edges_lkh.append((s_n, e_n)) # 强制锁死
+
+        repaired = self._sanitize_reduced_instance(distances, demands, fixed_edges_lkh)
+        if repaired is None:
+            return _fallback_tour(tours)
+        distances, demands = repaired
 
 
         # ==========================================
