@@ -40,9 +40,9 @@ class FSTA_Compressor:
         """
         步骤 2 & 3：图压缩与 LKH 求解 (严密对齐 Appendix B.1.5)
         """
-        def _fallback_tour() -> List[int]:
+        def _fallback_tour(input_tours: List[List[int]]) -> List[int]:
             flat = []
-            for route in tours:
+            for route in input_tours:
                 if not route:
                     continue
                 flat.extend(route)
@@ -74,7 +74,7 @@ class FSTA_Compressor:
         new_to_global = {n_id + 1: g_id for n_id, g_id in enumerate(new_nodes)}
         num_new_nodes = len(new_nodes)
         if num_new_nodes <= 1:
-            return _fallback_tour()
+            return _fallback_tour(tours)
 
         # 3. 构建 LKH 需要的显式距离矩阵和需求表 (核心魔法)
         distances = np.zeros((num_new_nodes, num_new_nodes), dtype=int)
@@ -114,12 +114,12 @@ class FSTA_Compressor:
         # ==========================================
         total_demand = sum(demands)
         if self.capacity <= 0:
-            return _fallback_tour()
+            return _fallback_tour(tours)
         min_required_vehicles = max(1, int(np.ceil(total_demand / self.capacity)))
         
         if num_new_nodes - 1 < min_required_vehicles:
             # 如果节点被压缩得比必须派出的车辆数还少，这是物理无解的。直接放弃本次退火！
-            return _fallback_tour()
+            return _fallback_tour(tours)
 
         # 4. 写入临时目录并调用 LKH-3 (多进程安全版)
         temp_dir = "/dev/shm" if os.path.exists("/dev/shm") else tempfile.gettempdir()
@@ -146,6 +146,7 @@ class FSTA_Compressor:
                 # 👑 完美动态车辆分配：既满足最低运力，又不超过节点数和最大限制
                 max_feasible_vehicles = max(1, num_new_nodes - 1)
                 safe_vehicles = max(min_required_vehicles, min(self.max_vehicles, max_feasible_vehicles))
+                assert safe_vehicles <= max_feasible_vehicles, "safe_vehicles exceeded feasible range"
                 self._write_par(par_path, vrp_path, out_path, vehicles=safe_vehicles)
             
                 process_result = subprocess.run(
@@ -162,7 +163,7 @@ class FSTA_Compressor:
                     print(f"👉 错误原因 (STDERR): {process_result.stderr}")
                     print("="*60 + "\n")
                 
-                    return _fallback_tour()
+                    return _fallback_tour(tours)
                 
                 # 5. 读取与无损解码
                 lkh_tour_new = self._parse_tour(out_path)
@@ -179,7 +180,7 @@ class FSTA_Compressor:
                 
 
                 # 👑 核心修复 2：回退时，必须把二维的 tours 拍平成一维（用 0 隔开），无缝喂给外面的代码！
-                return _fallback_tour()
+                return _fallback_tour(tours)
 
 
                 
