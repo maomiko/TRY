@@ -64,10 +64,8 @@ class FSTA_Compressor:
             src_root = os.path.join(build_dir, "LKH-3.0.14")
             env_jobs = os.getenv("LKH_BUILD_JOBS")
             try:
-                jobs = max(1, int(env_jobs)) if env_jobs is not None else 0
+                jobs = max(1, int(env_jobs)) if env_jobs is not None else max(1, min(os.cpu_count() or 1, 8))
             except (TypeError, ValueError):
-                jobs = 0
-            if jobs <= 0:
                 jobs = max(1, min(os.cpu_count() or 1, 8))
             subprocess.run(
                 ["make", "-C", src_root, f"-j{jobs}"],
@@ -83,7 +81,10 @@ class FSTA_Compressor:
             self._try_mark_executable(target_binary)
             return target_binary if self._can_execute(target_binary) else ""
         except Exception as e:
-            print(f"[LKH auto-build] failed: {e}")
+            print(
+                "[LKH auto-build] failed: "
+                f"{e}. Ensure tar/make are installed, or manually build LKH-3 from LKH-3.0.14.tgz."
+            )
             return ""
         finally:
             shutil.rmtree(build_dir, ignore_errors=True)
