@@ -1,4 +1,4 @@
-"""Simulated Annealing search for solving VRP instances one at a time."""
+"""Iterative destroy-repair search for solving VRP instances one at a time."""
 
 import os
 import glob
@@ -29,9 +29,6 @@ from .seed_sampler import SeedVectorSampler
 from .label_generator import L2SegLabelGenerator
 
 from .fsta_core import FSTA_Compressor
-
-MIN_SA_TEMPERATURE = 1e-12
-
 
 class MockProblemFeat:
     def __init__(self, depot_xy, node_xy, node_demand):
@@ -97,7 +94,7 @@ class PurePythonSolution:
 
 
 class Search:
-    """Simulated Annealing search that solves one VRP instance at a time."""
+    """Iterative search that solves one VRP instance at a time."""
 
     def __init__(
         self,
@@ -587,17 +584,15 @@ class Search:
 
     def _solve_one_instance(self, instance_idx: int) -> Dict[str, Any]:
         """
-        Solve a single VRP instance using Simulated Annealing with learned destroy operations.
+        Solve a single VRP instance using iterative destroy-repair with learned destroy operations.
 
         Returns dictionary with 'cost', 'runtime', 'nb_iterations', 'solution'.
         """
         aug_factor = self.tester_params["aug_factor"]
         max_iterations = self.tester_params["nb_iterations"]
         rollout_size = self.tester_params["rollout_size"]
-
-        # Initialize SA parameters
-        sa_config = self._init_simulated_annealing()
-        expert_data_mode = bool(self.tester_params.get("expert_data_mode", False))
+        max_runtime = float(self.tester_params.get("max_runtime", 0))
+        runtime_limited = max_runtime > 0
 
         start_time = time.time()
 
@@ -676,7 +671,7 @@ class Search:
         incumbent_cost = base_solution.totalCosts
         incumbent_solution = copy.deepcopy(base_solution)
 
-        # Simulated Annealing loop
+        # Iterative search loop
         seed_input = f"{self.seed}:{int(instance_idx)}".encode("utf-8")
         local_seed = int(hashlib.sha256(seed_input).hexdigest()[:16], 16)
         local_rng = random.Random(local_seed)
@@ -684,70 +679,23 @@ class Search:
         while iteration < max_iterations:
 
             if iteration % 5 == 0:
-                loop_name = "专家迭代" if expert_data_mode else "SA 退火迭代"
-                print(f" 实例 {instance_idx} | {loop_name}: {iteration}/{max_iterations} | 当前最佳 Cost: {incumbent_cost:.2f}")
-
-            if expert_data_mode:
-                # 论文 Algorithm 2 风格：R <- R+，独立于退火接受逻辑
-                new_solutions = self._perform_sa_iteration(
-                    aug_factor, rollout_size, sa_config["T"], local_rng
-                )
-                self.my_python_solutions = new_solutions
-
-                for sol in new_solutions:
-                    if sol.totalCosts < incumbent_cost:
-                        incumbent_cost = sol.totalCosts
-                        incumbent_solution = sol
-            else:
-                # Perform one SA iteration
-                new_solutions = self._perform_sa_iteration(
-                    aug_factor, rollout_size, sa_config["T"], local_rng
+                print(
+                    f" 实例 {instance_idx} | 专家迭代: {iteration}/{max_iterations} | 当前最佳 Cost: {incumbent_cost:.2f}"
                 )
 
-                # SA 接受/拒绝：Metropolis 准则
-                current_temp = max(float(sa_config["T"]), MIN_SA_TEMPERATURE)
-                accepted_solutions = []
-                for old_sol, new_sol in zip(self.my_python_solutions, new_solutions):
-                    old_cost = old_sol.totalCosts
-                    new_cost = new_sol.totalCosts
-                    delta_cost = new_cost - old_cost
+            # 论文 Algorithm 2 风格：R <- R+，不使用 SA 接受/降温逻辑
+            new_solutions = self._perform_iteration(aug_factor, rollout_size, local_rng)
+            self.my_python_solutions = new_solutions
 
-                    accept = False
-                    if delta_cost <= 0:
-                        accept = True
-                    else:
-                        accept_prob = float(np.exp(-delta_cost / current_temp))
-                        accept = local_rng.random() < accept_prob
-
-                    accepted_solutions.append(new_sol if accept else old_sol)
-
-                # Update incumbent
-                for sol in accepted_solutions:
-                    if sol.totalCosts < incumbent_cost:
-                        incumbent_cost = sol.totalCosts
-                        incumbent_solution = sol
-
-                # Synchronize augmented solutions (only when aug_factor > 1)
-                if aug_factor > 1:
-                    self._synchronize_augmented_solutions(
-                        accepted_solutions, sa_config["T"], sa_config["delta"]
-                    )
-
-                # Update solutions in environment
-                self.my_python_solutions = accepted_solutions
-
-                # Update temperature
-                sa_config["T"] = self._update_temperature(
-                    sa_config, iteration, start_time, max_iterations
-                )
+            for sol in new_solutions:
+                if sol.totalCosts < incumbent_cost:
+                    incumbent_cost = sol.totalCosts
+                    incumbent_solution = sol
 
             iteration += 1
 
             # Check runtime limit
-            if (
-                sa_config["runtime_limited"]
-                and (time.time() - start_time) > sa_config["max_runtime"]
-            ):
+            if runtime_limited and (time.time() - start_time) > max_runtime:
                 break
 
         runtime = time.time() - start_time
@@ -832,32 +780,8 @@ class Search:
                 }
             )
 
-    def _init_simulated_annealing(self) -> Dict[str, Any]:
-        """Initialize Simulated Annealing parameters."""
-        max_runtime = self.tester_params["max_runtime"]
-        runtime_limited = max_runtime > 0
-
-        T_0 = self.tester_params["SA_start_T"]
-        T_f = self.tester_params["SA_final_T"]
-
-        config = {
-            "T": T_0,
-            "T_0": T_0,
-            "T_f": T_f,
-            "delta": self.tester_params["SA_delta"],
-            "max_runtime": max_runtime,
-            "runtime_limited": runtime_limited,
-        }
-
-        # Compute cooling rate if not runtime-limited
-        if not runtime_limited:
-            nb_iterations = self.tester_params["nb_iterations"]
-            config["cooling_rate"] = (T_f / T_0) ** (1 / nb_iterations)
-
-        return config
-
-    def _perform_sa_iteration(
-        self, aug_factor: int, rollout_size: int, temperature: float, rng: random.Random
+    def _perform_iteration(
+        self, aug_factor: int, rollout_size: int, rng: random.Random
     ) -> List[Any]:
         use_ai_accelerator = (len(self.destroy_operators) > 0) and (not self.tester_params.get("use_baseline_destroy", True))
 
@@ -1044,7 +968,7 @@ class Search:
         model = operator["model"]
 
         
-        # 直接使用传入的 reset_state，保护 SA 现场不被破坏！
+        # 直接使用传入的 reset_state，保护当前迭代现场不被破坏！
 
         # 论文推荐超参数（支持通过 tester_params 覆盖）
         eta = float(self.tester_params.get("nar_threshold", 0.6))
@@ -1128,51 +1052,6 @@ class Search:
         clean_selected_nodes = [list(final_destroyed_nodes) for _ in range(aug_factor)]
 
         return clean_selected_nodes
-    def _synchronize_augmented_solutions(
-        self, solutions: List[Any], temperature: float, delta: float
-    ) -> None:
-        """
-        Synchronize solutions across augmentations by replacing poor solutions
-        with good candidates (within temperature threshold).
-        """
-        costs = np.array([sol.totalCosts for sol in solutions])
-        min_cost = np.min(costs)
-
-        # Find candidate solutions (within threshold)
-        threshold = min_cost + temperature * delta
-        candidate_indices = np.where(costs < threshold)[0]
-
-        if len(candidate_indices) == 0:
-            return
-
-        # Replace solutions that are too expensive
-        for idx in range(len(solutions)):
-            if costs[idx] > threshold:
-                replacement_idx = np.random.choice(candidate_indices)
-                solutions[idx] = solutions[replacement_idx]
-
-    def _update_temperature(
-        self,
-        sa_config: Dict[str, Any],
-        iteration: int,
-        start_time: float,
-        max_iterations: int,
-    ) -> float:
-        """Update and return new temperature for Simulated Annealing."""
-        if sa_config["runtime_limited"]:
-            # Runtime-based cooling schedule
-            elapsed = time.time() - start_time
-            max_runtime = sa_config["max_runtime"]
-            progress = min(1.0, elapsed / max_runtime)
-            T = sa_config["T_f"] * (sa_config["T_0"] / sa_config["T_f"]) ** (
-                1 - progress
-            )
-        else:
-            # Iteration-based geometric cooling
-            T = sa_config["T"] * sa_config["cooling_rate"]
-
-        return T
-
     def _log_instance_progress(
         self,
         instance_idx: int,
