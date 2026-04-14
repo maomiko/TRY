@@ -160,7 +160,12 @@ class Search:
 
     def _resolve_lkh_path(self) -> str:
         """Resolve lkh_path with env expansion and safe fallback."""
-        raw_path = self.tester_params.get("lkh_path", self.env_params.get("lkh_path", "./LKH-3"))
+        if "lkh_path" in self.tester_params:
+            raw_path = self.tester_params["lkh_path"]
+        elif "lkh_path" in self.env_params:
+            raw_path = self.env_params["lkh_path"]
+        else:
+            raw_path = "./LKH-3"
         lkh_path = str(raw_path).strip()
         lkh_path = os.path.expanduser(os.path.expandvars(lkh_path))
 
@@ -174,7 +179,10 @@ class Search:
             )
             return fallback
 
-        return lkh_path
+        raise FileNotFoundError(
+            f"LKH executable not found: configured={lkh_path}, fallback={fallback}. "
+            "Please set tester_params.lkh_path to a valid executable path."
+        )
 
     def _setup_device(self) -> torch.device:
         """Setup and return the compute device (CPU or CUDA)."""

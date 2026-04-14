@@ -56,7 +56,7 @@ tester_params:
   SA_final_T: 1
   SA_delta: 0.1
   softmax_temp: 1.0
-  lkh_path: "C:\\path\\to\\LKH-3.exe"
+  lkh_path: "C:\\path\\to\\LKH-3.exe"  # TODO: 替换为你本机可执行的 LKH-3.exe 绝对路径
 
   test_data_load:
     enable: true
