@@ -269,7 +269,8 @@ class InstanceGenCVRP:
         Args:
             batch_size: Number of instances to generate
             seed: Optional random seed for reproducibility
-            progress_callback: Optional callable(done: int, total: int) for progress reporting
+            progress_callback (callable, optional): Callback with signature
+                progress_callback(done: int, total: int) for progress reporting.
 
         Returns:
             depot_xy: (batch_size, 1, 2) tensor of depot coordinates
