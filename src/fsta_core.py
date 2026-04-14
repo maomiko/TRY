@@ -28,6 +28,7 @@ class FSTA_Compressor:
         lkh_path: str = "./LKH-3",
         max_vehicles: int = 50,
         timeout_sec: int = 15,
+        lkh_trace: bool = False,
     ):
         self.node_xy = node_xy
         self.node_demand = node_demand
@@ -36,6 +37,12 @@ class FSTA_Compressor:
         self.max_vehicles = max_vehicles
         self.timeout_sec = max(1, int(timeout_sec))
         self._disable_lkh = False
+        self.lkh_trace = lkh_trace
+
+    def _trace_print(self, message: str) -> None:
+        """Conditionally emit LKH debugging traces when lkh_trace is enabled."""
+        if self.lkh_trace:
+            print(message)
 
     def _is_windows_exe(self, path: str) -> bool:
         return path.lower().endswith(".exe")
@@ -231,19 +238,19 @@ class FSTA_Compressor:
         min_required_vehicles: int,
         max_feasible_vehicles: int,
     ) -> None:
-        print("\n" + "=" * 80)
-        print("[LKH trace] minimal reproducible context")
-        print(f"run_id: {run_id}")
-        print(f"command: {' '.join(command)}")
-        print(f"lkh_path: {self.lkh_path}")
-        print(f"par_path: {par_path}")
-        print(f"vrp_path: {vrp_path}")
-        print(f"tour_path: {out_path}")
-        print(
+        self._trace_print("\n" + "=" * 80)
+        self._trace_print("[LKH trace] minimal reproducible context")
+        self._trace_print(f"run_id: {run_id}")
+        self._trace_print(f"command: {' '.join(command)}")
+        self._trace_print(f"lkh_path: {self.lkh_path}")
+        self._trace_print(f"par_path: {par_path}")
+        self._trace_print(f"vrp_path: {vrp_path}")
+        self._trace_print(f"tour_path: {out_path}")
+        self._trace_print(
             "vehicles: "
             f"safe={safe_vehicles}, min_required={min_required_vehicles}, max_feasible={max_feasible_vehicles}"
         )
-        print("=" * 80)
+        self._trace_print("=" * 80)
 
     def _log_process_result(self, process_result: subprocess.CompletedProcess) -> None:
         returncode = process_result.returncode
@@ -251,25 +258,25 @@ class FSTA_Compressor:
         stderr = process_result.stderr or ""
         classification = self._classify_failure(returncode, stdout, stderr)
 
-        print("\n" + "=" * 80)
-        print("[LKH trace] process result")
-        print(f"returncode: {returncode} ({self._format_returncode_as_hex(returncode)})")
-        print(f"classification: {classification}")
+        self._trace_print("\n" + "=" * 80)
+        self._trace_print("[LKH trace] process result")
+        self._trace_print(f"returncode: {returncode} ({self._format_returncode_as_hex(returncode)})")
+        self._trace_print(f"classification: {classification}")
 
         stdout_head, stdout_tail = self._extract_head_tail_lines(stdout, line_count=50)
         stderr_head, stderr_tail = self._extract_head_tail_lines(stderr, line_count=50)
-        print(f"stdout_head_50: {stdout_head}")
-        print(f"stdout_tail_50: {stdout_tail}")
-        print(f"stderr_head_50: {stderr_head}")
-        print(f"stderr_tail_50: {stderr_tail}")
+        self._trace_print(f"stdout_head_50: {stdout_head}")
+        self._trace_print(f"stdout_tail_50: {stdout_tail}")
+        self._trace_print(f"stderr_head_50: {stderr_head}")
+        self._trace_print(f"stderr_tail_50: {stderr_tail}")
 
         if classification == "lkh_process_crash":
-            print("判定: LKH 本体/运行环境崩溃（Windows 异常退出码）")
+            self._trace_print("判定: LKH 本体/运行环境崩溃（Windows 异常退出码）")
         elif classification == "data_or_parameter_error":
-            print("判定: 更可能是数据/参数问题（建议检查 DIMENSION/DEMAND/CAPACITY/VEHICLES）")
+            self._trace_print("判定: 更可能是数据/参数问题（建议检查 DIMENSION/DEMAND/CAPACITY/VEHICLES）")
         else:
-            print("判定: 非零退出但原因不明确，建议结合手工运行与多输入对比排查")
-        print("=" * 80 + "\n")
+            self._trace_print("判定: 非零退出但原因不明确，建议结合手工运行与多输入对比排查")
+        self._trace_print("=" * 80 + "\n")
 
     def _run_lkh_once(self, par_path: str, timeout_sec: Optional[int] = None) -> subprocess.CompletedProcess:
         effective_timeout = self.timeout_sec if timeout_sec is None else max(1, int(timeout_sec))
@@ -543,7 +550,7 @@ class FSTA_Compressor:
                 vehicles=safe_vehicles,
                 capacity=self.capacity,
             ):
-                print("[LKH trace] invalid reduced instance detected before LKH call; fallback applied.")
+                self._trace_print("[LKH trace] invalid reduced instance detected before LKH call; fallback applied.")
                 return _fallback_tour(tours)
 
             self._write_explicit_vrp(vrp_path, num_new_nodes, distances, demands, fixed_edges_lkh)
@@ -582,7 +589,7 @@ class FSTA_Compressor:
                     ):
                         retry_max_candidates = max_feasible_vehicles
                         if retry_max_candidates > base_max_candidates:
-                            print(
+                            self._trace_print(
                                 "[LKH trace] no-candidates detected, retry once with "
                                 f"MAX_CANDIDATES={retry_max_candidates}"
                             )
@@ -595,7 +602,7 @@ class FSTA_Compressor:
                             )
                             process_result = self._run_lkh_once(par_path)
                             if process_result.returncode == 0:
-                                print("[LKH trace] retry succeeded with expanded MAX_CANDIDATES.")
+                                self._trace_print("[LKH trace] retry succeeded with expanded MAX_CANDIDATES.")
                             else:
                                 self._log_process_result(process_result)
 
@@ -606,7 +613,7 @@ class FSTA_Compressor:
                             max_feasible_vehicles=max_feasible_vehicles,
                         )
                         if retry_vehicles > safe_vehicles:
-                            print(
+                            self._trace_print(
                                 f"[LKH trace] data/parameter-like failure detected, retry once with "
                                 f"relaxed VEHICLES={retry_vehicles}"
                             )
@@ -619,7 +626,7 @@ class FSTA_Compressor:
                             )
                             process_result = self._run_lkh_once(par_path)
                             if process_result.returncode == 0:
-                                print("[LKH trace] retry succeeded with relaxed VEHICLES.")
+                                self._trace_print("[LKH trace] retry succeeded with relaxed VEHICLES.")
                             else:
                                 self._log_process_result(process_result)
 
@@ -631,7 +638,7 @@ class FSTA_Compressor:
                     process_result.stderr or "",
                 )
                 if final_classification == "lkh_process_crash":
-                    print(
+                    self._trace_print(
                         "[LKH trace] detected native crash; disable LKH and use fallback repair for "
                         "subsequent iterations."
                     )
@@ -641,24 +648,24 @@ class FSTA_Compressor:
             # 5. 读取与无损解码
             lkh_tour_new = self._parse_tour(out_path)
             if not lkh_tour_new:
-                print("[LKH trace] empty/invalid TOUR_FILE content; fallback applied.")
+                self._trace_print("[LKH trace] empty/invalid TOUR_FILE content; fallback applied.")
                 self._disable_lkh = True
                 return _fallback_tour(tours)
 
             recovered = self._recover_solution(lkh_tour_new, new_to_global, segments)
             if not self._is_valid_flat_tour(recovered, expected_customers):
-                print("[LKH trace] recovered tour failed validation; fallback applied.")
+                self._trace_print("[LKH trace] recovered tour failed validation; fallback applied.")
                 return _fallback_tour(tours)
 
             return recovered
 
         except subprocess.TimeoutExpired as e:
-            print("\n" + "!"*60)
-            print("LKH-3 陷入死循环，已被 Python 强制狙击！")
-            print("让我们看看它死前到底卡在哪一步了：")
-            print(f"{e.stdout}")
-            print(f"顺便检查一下容量参数对不对：Capacity = {self.capacity}")
-            print("!"*60 + "\n")
+            self._trace_print("\n" + "!"*60)
+            self._trace_print("LKH-3 陷入死循环，已被 Python 强制狙击！")
+            self._trace_print("让我们看看它死前到底卡在哪一步了：")
+            self._trace_print(f"{e.stdout}")
+            self._trace_print(f"顺便检查一下容量参数对不对：Capacity = {self.capacity}")
+            self._trace_print("!"*60 + "\n")
             # 超时后单次救援重试：放宽 VEHICLES / MAX_CANDIDATES，并给更长超时窗口。
             try:
                 available_locals = locals()
@@ -675,7 +682,7 @@ class FSTA_Compressor:
                         max_feasible_vehicles,
                         self._recommended_max_candidates(retry_vehicles),
                     )
-                    print(
+                    self._trace_print(
                         "[LKH trace] timeout rescue retry with "
                         f"VEHICLES={retry_vehicles}, MAX_CANDIDATES={retry_max_candidates}"
                     )
@@ -693,21 +700,21 @@ class FSTA_Compressor:
                         if retry_tour:
                             retry_recovered = self._recover_solution(retry_tour, new_to_global, segments)
                             if self._is_valid_flat_tour(retry_recovered, expected_customers):
-                                print("[LKH trace] timeout rescue retry succeeded.")
+                                self._trace_print("[LKH trace] timeout rescue retry succeeded.")
                                 return retry_recovered
                     else:
                         self._log_process_result(retry_result)
             except subprocess.TimeoutExpired:
-                print("[LKH trace] timeout rescue retry also timed out; fallback applied.")
+                self._trace_print("[LKH trace] timeout rescue retry also timed out; fallback applied.")
             except Exception as retry_err:
-                print(f"[LKH trace] timeout rescue retry failed: {retry_err}")
+                self._trace_print(f"[LKH trace] timeout rescue retry failed: {retry_err}")
             return _fallback_tour(tours)
         except (FileNotFoundError, PermissionError, OSError) as e:
-            print("\n" + "="*60)
-            print("💀 LKH-3 不可执行或缺失，已成功拦截，正在平滑回退。")
-            print(f"👉 错误原因: {e}")
-            print(f"👉 当前 LKH 路径: {self.lkh_path}")
-            print("="*60 + "\n")
+            self._trace_print("\n" + "="*60)
+            self._trace_print("💀 LKH-3 不可执行或缺失，已成功拦截，正在平滑回退。")
+            self._trace_print(f"👉 错误原因: {e}")
+            self._trace_print(f"👉 当前 LKH 路径: {self.lkh_path}")
+            self._trace_print("="*60 + "\n")
             return _fallback_tour(tours)
             
         finally:

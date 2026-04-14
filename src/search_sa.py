@@ -149,6 +149,13 @@ class Search:
         self.test_dataset_size = None
 
         self.lkh_path = self._resolve_lkh_path()
+        raw_iteration_log_interval = int(self.tester_params.get("iteration_log_interval", 5))
+        if raw_iteration_log_interval < 0:
+            self.logger.warning(
+                "iteration_log_interval=%s is negative; clamped to 0 (disable per-iteration logs).",
+                raw_iteration_log_interval,
+            )
+        self.iteration_log_interval = max(0, raw_iteration_log_interval)
 
         
        
@@ -618,7 +625,8 @@ class Search:
             capacity=int(raw_capacity),
             lkh_path=lkh_path,
             timeout_sec=lkh_timeout_sec,
-            max_vehicles=self.env_params.get("max_vehicles", 50)
+            max_vehicles=self.env_params.get("max_vehicles", 50),
+            lkh_trace=bool(self.tester_params.get("lkh_trace", False)),
         )
 
         # ==========================================
@@ -665,7 +673,7 @@ class Search:
         if base_solution.totalCosts <= 0:
             raise RuntimeError(f"Initial solution for instance {instance_idx} has non-positive cost.")
         self.my_python_solutions = [copy.deepcopy(base_solution) for _ in range(aug_factor)]
-        print(f"✅ 初始解生成完毕！初始 Cost: {base_solution.totalCosts:.2f}")
+        self.logger.info(f"✅ 初始解生成完毕！初始 Cost: {base_solution.totalCosts:.2f}")
 
         # Track best solution
         incumbent_cost = base_solution.totalCosts
@@ -678,8 +686,8 @@ class Search:
         iteration = 0
         while iteration < max_iterations:
 
-            if iteration % 5 == 0:
-                print(
+            if self.iteration_log_interval > 0 and iteration % self.iteration_log_interval == 0:
+                self.logger.info(
                     f" 实例 {instance_idx} | 专家迭代: {iteration}/{max_iterations} | 当前最佳 Cost: {incumbent_cost:.2f}"
                 )
 
