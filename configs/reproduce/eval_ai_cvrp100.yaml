@@ -35,6 +35,7 @@ tester_params:
   deterministic: true
   use_cuda: false
   cuda_device_num: 0
+  expert_data_mode: false
   use_baseline_destroy: false
 
   nar_threshold: 0.6

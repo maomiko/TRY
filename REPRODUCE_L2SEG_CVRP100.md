@@ -53,6 +53,7 @@ python eval.py --config configs/reproduce/label_gen_cvrp100.yaml --seed 1234
 ```
 
 说明：`eval.py` 默认配置已对齐为 `configs/reproduce/label_gen_cvrp100.yaml`。
+当前配置启用了 `tester_params.expert_data_mode=true`，会走**独立专家数据生成流程**（按论文 Algorithm 2 的 `R -> R+` 更新，不再依赖 SA 的 Metropolis 接受逻辑）。
 
 LKH 说明（Linux/macOS）：
 
@@ -74,6 +75,13 @@ Windows 排查（LKH 崩溃 vs 数据参数崩溃）请参考：
 期望输出：
 
 - `results/l2seg_dataset/l2seg_training_data.pt`
+
+论文参数对齐（D.3，数据生成）：
+
+- `TIS = 40` → `nb_iterations=40`
+- `η_improv = 0` → `eta_improv=0.0`
+- `alpha_ac = 0`（论文表格记作 `α_AC`；small-capacity：小容量设定的 CVRP/VRPTW 训练数据生成）→ `alpha_ac=0.0`  
+  （实现约定：`alpha_ac <= 0` 时不做额外随机下采样，即保留满足改进阈值的专家标签）
 
 ### 阶段 B：训练 L2Seg 模型
 

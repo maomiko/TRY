@@ -39,9 +39,15 @@ tester_params:
   deterministic: true
   use_cuda: false
   cuda_device_num: 0
+  # 独立专家模式数据生成（与 SA 接受逻辑解耦）
+  expert_data_mode: true
   use_baseline_destroy: true
   model_load: []
   l2s_data_save_path: "results/l2seg_dataset/l2seg_training_data.pt"
+
+  # 论文 Algorithm 2（D.3）：η_improv / α_AC
+  eta_improv: 0.0
+  alpha_ac: 0.0
   nar_threshold: 0.6
   n_kmeans: 3
 
