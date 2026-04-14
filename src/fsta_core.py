@@ -631,7 +631,10 @@ class FSTA_Compressor:
                     process_result.stderr or "",
                 )
                 if final_classification == "lkh_process_crash":
-                    print("[LKH trace] detected native crash; disable LKH for subsequent iterations.")
+                    print(
+                        "[LKH trace] detected native crash; disable LKH and use fallback repair for "
+                        "subsequent iterations."
+                    )
                     self._disable_lkh = True
                 return _fallback_tour(tours)
 
