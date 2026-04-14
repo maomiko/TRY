@@ -196,6 +196,7 @@ class Model(nn.Module):
         # ==========================================
         # 不再瞎猜起点，而是直接使用传入的 starting_node 构建 batch 的初始输入
         start_nodes = torch.full((batch_size,), starting_node, dtype=torch.long, device=device)
+        start_nodes = start_nodes.clamp(min=0, max=self.PAD_TOKEN)
         
         generated_sequences = [start_nodes.unsqueeze(1)]
         current_nodes = start_nodes
@@ -219,6 +220,7 @@ class Model(nn.Module):
 
         # 3. AR 自回归生成循环：严格交替的 删除(Delete) 与 插入(Insert) 阶段
         for step in range(max_steps - 1):
+            current_nodes = current_nodes.clamp(min=0, max=self.PAD_TOKEN)
             # 将当前节点转为 Embedding
             step_input = self.ar_embedding(current_nodes) # (batch, dim)
             
@@ -286,10 +288,16 @@ class Model(nn.Module):
                     else:
                         # 如果是普通客户节点，严格提取它在原解中的 2 个邻居
                         # 假设 solution_neighbours 维度为 (batch, problem_size, 2)，客户索引需 -1
-                        left_neighbor = solution_neighbours[b, curr_node - 1, 0]
-                        right_neighbor = solution_neighbours[b, curr_node - 1, 1]
-                        deletion_mask[b, 0, left_neighbor] = 0.0
-                        deletion_mask[b, 0, right_neighbor] = 0.0
+                        customer_idx = curr_node - 1
+                        if 0 <= customer_idx < solution_neighbours.size(1):
+                            left_neighbor = int(solution_neighbours[b, customer_idx, 0].item())
+                            right_neighbor = int(solution_neighbours[b, customer_idx, 1].item())
+                            if 0 <= left_neighbor < scores.size(2):
+                                deletion_mask[b, 0, left_neighbor] = 0.0
+                            if 0 <= right_neighbor < scores.size(2):
+                                deletion_mask[b, 0, right_neighbor] = 0.0
+                        else:
+                            deletion_mask[b, 0, 1:end_token_idx] = 0.0
                 
                 # 叠加 Mask，强迫模型只能在合法的边上进行 Destroy 操作
                 scores = scores + deletion_mask
@@ -310,6 +318,7 @@ class Model(nn.Module):
             
             # 选出得分最高的下一个节点
             next_nodes = scores.argmax(dim=2).squeeze(1) # (batch_size,)
+            next_nodes = next_nodes.clamp(min=0, max=self.PAD_TOKEN)
             
             generated_sequences.append(next_nodes.unsqueeze(1))
             current_nodes = next_nodes

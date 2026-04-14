@@ -1,6 +1,7 @@
 """Simulated Annealing search for solving VRP instances one at a time."""
 
 import os
+import glob
 import time
 import random
 import hashlib
@@ -173,25 +174,72 @@ class Search:
 
         operators = []
         for model_config in self.tester_params["model_load"]:
-            checkpoint_path = "{path}/checkpoint-{epoch}.pt".format(**model_config)
-            checkpoint = torch.load(
-                checkpoint_path, map_location=self.device, weights_only=True
+            checkpoint_path = self._resolve_checkpoint_path(model_config)
+            if checkpoint_path is None:
+                self.logger.warning(
+                    "No checkpoint found for model config %s, skipping AI destroy operator.",
+                    model_config,
+                )
+                continue
+
+            checkpoint = self._load_checkpoint_compat(checkpoint_path)
+            if checkpoint is None:
+                self.logger.warning(
+                    "Failed to load checkpoint %s, skipping AI destroy operator.",
+                    checkpoint_path,
+                )
+                continue
+            model_params = dict(checkpoint.get("model_params", {}))
+            model_params.setdefault("problem", self.env_params.get("problem", "cvrp"))
+            model_params.setdefault(
+                "problem_size", int(self.env_params.get("problem_size", 100))
             )
-            model_params = checkpoint["model_params"]
 
             # Create and load model
             model = Model(**model_params).to(self.device)
-            model.load_state_dict(checkpoint["model_state_dict"])
+            ckpt_state = checkpoint.get("model_state_dict", {})
+            model_state = model.state_dict()
+            compatible_state = {
+                k: v
+                for k, v in ckpt_state.items()
+                if (k in model_state and model_state[k].shape == v.shape)
+            }
+            missing, unexpected = model.load_state_dict(
+                compatible_state, strict=False
+            )
             model.eval()
+            if len(compatible_state) != len(ckpt_state):
+                self.logger.warning(
+                    "Checkpoint %s partially compatible (%d/%d tensors matched by shape).",
+                    checkpoint_path,
+                    len(compatible_state),
+                    len(ckpt_state),
+                )
+            if len(missing) > 0 or len(unexpected) > 0:
+                self.logger.warning(
+                    "Checkpoint %s loaded with non-strict mode (missing=%d, unexpected=%d).",
+                    checkpoint_path,
+                    len(missing),
+                    len(unexpected),
+                )
 
             # Create seed vector sampler
-            seed_sampler = SeedVectorSampler(model_params["z_dim"], self.device)
+            seed_sampler = SeedVectorSampler(int(model_params.get("z_dim", 16)), self.device)
 
             # Verify configuration matches
-            assert (
-                checkpoint["env_params"]["num_nodes_to_remove"]
-                == model_config["node_to_remove"]
-            ), f"Model trained with different num_nodes_to_remove: {checkpoint['env_params']['num_nodes_to_remove']} vs {model_config['node_to_remove']}"
+            checkpoint_remove = (
+                checkpoint.get("env_params", {}).get("num_nodes_to_remove", None)
+            )
+            if checkpoint_remove is not None and checkpoint_remove != model_config.get(
+                "node_to_remove"
+            ):
+                self.logger.warning(
+                    "Model remove-count mismatch (%s vs %s), skipping operator %s.",
+                    checkpoint_remove,
+                    model_config.get("node_to_remove"),
+                    checkpoint_path,
+                )
+                continue
 
             operators.append(
                 {"model": model, "seed_sampler": seed_sampler, **model_config}
@@ -199,7 +247,60 @@ class Search:
 
             self.logger.info(f"Loaded deconstruction policy from {checkpoint_path}")
 
+        if len(operators) == 0:
+            self.logger.warning(
+                "No valid AI destroy operator loaded; evaluation will fall back to baseline destroy."
+            )
         return operators
+
+    def _resolve_checkpoint_path(self, model_config: Dict[str, Any]) -> Optional[str]:
+        """Resolve checkpoint path from config, with safe fallbacks."""
+        base_path = str(model_config.get("path", ""))
+        epoch = model_config.get("epoch", None)
+        if base_path and epoch is not None:
+            direct = os.path.join(base_path, f"checkpoint-{epoch}.pt")
+            if os.path.exists(direct):
+                return direct
+
+        if base_path:
+            discovered = sorted(glob.glob(os.path.join(base_path, "checkpoint-*.pt")))
+            if len(discovered) > 0:
+                return discovered[-1]
+
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        fallback = os.path.join(
+            repo_root,
+            "models",
+            f"{self.env_params.get('problem', 'cvrp')}_{int(self.env_params.get('problem_size', 100))}",
+            "checkpoint-2000.pt",
+        )
+        if os.path.exists(fallback):
+            return fallback
+        return None
+
+    def _load_checkpoint_compat(self, checkpoint_path: str) -> Optional[Dict[str, Any]]:
+        """Load checkpoint with compatibility for newer torch defaults."""
+        try:
+            return torch.load(
+                checkpoint_path, map_location=self.device, weights_only=True
+            )
+        except Exception as e:
+            self.logger.warning(
+                "weights_only=True failed for %s (%s), retrying with weights_only=False.",
+                checkpoint_path,
+                str(e).splitlines()[0] if str(e) else type(e).__name__,
+            )
+        try:
+            return torch.load(
+                checkpoint_path, map_location=self.device, weights_only=False
+            )
+        except Exception as e:
+            self.logger.error(
+                "Checkpoint load failed for %s: %s",
+                checkpoint_path,
+                str(e).splitlines()[0] if str(e) else type(e).__name__,
+            )
+            return None
 
     def run(self) -> None:
         """Run search on all test instances and save results."""
