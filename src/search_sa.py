@@ -151,10 +151,30 @@ class Search:
         self.test_dataset = None
         self.test_dataset_size = None
 
+        self.lkh_path = self._resolve_lkh_path()
+
         
        
 
         
+
+    def _resolve_lkh_path(self) -> str:
+        """Resolve lkh_path with env expansion and safe fallback."""
+        raw_path = self.tester_params.get("lkh_path", self.env_params.get("lkh_path", "./LKH-3"))
+        lkh_path = str(raw_path).strip()
+        lkh_path = os.path.expanduser(os.path.expandvars(lkh_path))
+
+        if os.path.exists(lkh_path):
+            return lkh_path
+
+        fallback = os.path.abspath("./LKH-3")
+        if os.path.exists(fallback):
+            self.logger.warning(
+                f"Configured lkh_path not found: {lkh_path}. Falling back to {fallback}."
+            )
+            return fallback
+
+        return lkh_path
 
     def _setup_device(self) -> torch.device:
         """Setup and return the compute device (CPU or CUDA)."""
@@ -501,7 +521,7 @@ class Search:
         lkh_node_xy = self.full_node_xy.astype(np.float32)
         lkh_demand = np.concatenate(([0], raw_n_dem)).astype(np.int64)
         lkh_timeout_sec = int(self.tester_params.get("lkh_timeout_sec", 60))
-        lkh_path = self.tester_params.get("lkh_path", self.env_params.get("lkh_path", "./LKH-3"))
+        lkh_path = self.lkh_path
 
         self.fsta_compressor = FSTA_Compressor(
             node_xy=lkh_node_xy,
