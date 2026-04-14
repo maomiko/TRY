@@ -580,8 +580,6 @@ class Search:
         candidate_positions = [i for i, node in enumerate(flat_nodes) if int(node) in destroyed_nodes]
         if len(candidate_positions) < 2:
             candidate_positions = list(range(len(flat_nodes)))
-        if len(candidate_positions) < 2:
-            return repaired
 
         i, j = rng.sample(candidate_positions, 2)
         flat_nodes[i], flat_nodes[j] = flat_nodes[j], flat_nodes[i]
