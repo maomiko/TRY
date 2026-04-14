@@ -88,6 +88,8 @@ class InstanceGenVRPTW:
         Args:
             batch_size (int): Number of instances to generate.
             seed (int, optional): Random seed for reproducibility.
+            progress_callback (callable, optional): Callback with signature
+                progress_callback(done: int, total: int) for progress reporting.
 
         Returns:
             depot_xy (Tensor): (batch_size, 1, 2) depot coordinates.
