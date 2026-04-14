@@ -10,6 +10,8 @@ from typing import List, Set, Tuple, Dict, Optional
 UINT32_MODULUS = 1 << 32
 WINDOWS_ACCESS_VIOLATION = -1073741819  # 0xC0000005
 WINDOWS_STACK_BUFFER_OVERRUN = -1073740791  # 0xC0000409
+WINDOWS_ACCESS_VIOLATION_U32 = 0xC0000005
+WINDOWS_STACK_BUFFER_OVERRUN_U32 = 0xC0000409
 
 class FSTA_Compressor:
     """
@@ -176,7 +178,11 @@ class FSTA_Compressor:
         return hex(returncode)
 
     def _classify_failure(self, returncode: int, stdout: str, stderr: str) -> str:
-        if returncode in (WINDOWS_ACCESS_VIOLATION, WINDOWS_STACK_BUFFER_OVERRUN):
+        returncode_u32 = int(returncode) & 0xFFFFFFFF
+        if (
+            returncode in (WINDOWS_ACCESS_VIOLATION, WINDOWS_STACK_BUFFER_OVERRUN)
+            or returncode_u32 in (WINDOWS_ACCESS_VIOLATION_U32, WINDOWS_STACK_BUFFER_OVERRUN_U32)
+        ):
             return "lkh_process_crash"
 
         msg = f"{stdout}\n{stderr}".lower()
@@ -188,12 +194,16 @@ class FSTA_Compressor:
             "invalid",
             "infeasible",
             "not feasible",
-            "parameter",
             "no candidates",
         )
         if any(k in msg for k in data_keywords):
             return "data_or_parameter_error"
         return "unknown_nonzero_exit"
+
+    @staticmethod
+    def _is_no_candidates_failure(stdout: str, stderr: str) -> bool:
+        msg = f"{stdout}\n{stderr}".lower()
+        return "no candidates" in msg
 
     @staticmethod
     def _extract_head_tail_lines(text: str, line_count: int = 50) -> Tuple[List[str], List[str]]:
@@ -522,7 +532,14 @@ class FSTA_Compressor:
                 return _fallback_tour(tours)
 
             self._write_explicit_vrp(vrp_path, num_new_nodes, distances, demands, fixed_edges_lkh)
-            self._write_par(par_path, vrp_path, out_path, vehicles=safe_vehicles)
+            base_max_candidates = max(20, safe_vehicles + 5)
+            self._write_par(
+                par_path,
+                vrp_path,
+                out_path,
+                vehicles=safe_vehicles,
+                max_candidates=base_max_candidates,
+            )
             run_command = [self.lkh_path, par_path]
             self._log_lkh_context(
                 run_id=run_id,
@@ -544,22 +561,52 @@ class FSTA_Compressor:
                     process_result.stderr or "",
                 )
                 if classification == "data_or_parameter_error":
-                    retry_vehicles = self._calculate_retry_vehicles(
-                        safe_vehicles=safe_vehicles,
-                        min_required_vehicles=min_required_vehicles,
-                        max_feasible_vehicles=max_feasible_vehicles,
-                    )
-                    if retry_vehicles > safe_vehicles:
-                        print(
-                            f"[LKH trace] data/parameter-like failure detected, retry once with "
-                            f"relaxed VEHICLES={retry_vehicles}"
+                    if self._is_no_candidates_failure(
+                        process_result.stdout or "",
+                        process_result.stderr or "",
+                    ):
+                        expanded_candidates = max_feasible_vehicles
+                        if expanded_candidates > base_max_candidates:
+                            print(
+                                "[LKH trace] no-candidates detected, retry once with "
+                                f"MAX_CANDIDATES={expanded_candidates}"
+                            )
+                            self._write_par(
+                                par_path,
+                                vrp_path,
+                                out_path,
+                                vehicles=safe_vehicles,
+                                max_candidates=expanded_candidates,
+                            )
+                            process_result = self._run_lkh_once(par_path)
+                            if process_result.returncode == 0:
+                                print("[LKH trace] retry succeeded with expanded MAX_CANDIDATES.")
+                            else:
+                                self._log_process_result(process_result)
+
+                    if process_result.returncode != 0:
+                        retry_vehicles = self._calculate_retry_vehicles(
+                            safe_vehicles=safe_vehicles,
+                            min_required_vehicles=min_required_vehicles,
+                            max_feasible_vehicles=max_feasible_vehicles,
                         )
-                        self._write_par(par_path, vrp_path, out_path, vehicles=retry_vehicles)
-                        process_result = self._run_lkh_once(par_path)
-                        if process_result.returncode == 0:
-                            print("[LKH trace] retry succeeded with relaxed VEHICLES.")
-                        else:
-                            self._log_process_result(process_result)
+                        if retry_vehicles > safe_vehicles:
+                            print(
+                                f"[LKH trace] data/parameter-like failure detected, retry once with "
+                                f"relaxed VEHICLES={retry_vehicles}"
+                            )
+                            self._write_par(
+                                par_path,
+                                vrp_path,
+                                out_path,
+                                vehicles=retry_vehicles,
+                                max_candidates=max(20, retry_vehicles + 5),
+                            )
+                            process_result = self._run_lkh_once(par_path)
+                            if process_result.returncode == 0:
+                                print("[LKH trace] retry succeeded with relaxed VEHICLES.")
+                            else:
+                                self._log_process_result(process_result)
 
             # 👑 核心防御：如果 LKH 底层崩溃，绝对不能交白卷！必须触发平滑回退
             if process_result.returncode != 0:
@@ -719,13 +766,15 @@ class FSTA_Compressor:
         return tour
     
     # 👑 接收我们传进来的 vehicles
-    def _write_par(self, par_path, vrp_path, out_path, vehicles=50):
+    def _write_par(self, par_path, vrp_path, out_path, vehicles=50, max_candidates=None):
         with open(par_path, 'w') as f:
             f.write(f"PROBLEM_FILE = {vrp_path}\nTOUR_FILE = {out_path}\n")
             f.write("RUNS = 1\nTIME_LIMIT = 10\nTRACE_LEVEL = 0\n")
             
             # 👑 突破“假车场黑洞”：视距必须穿透所有的假车场，再额外看到 5 个真实客户！
             cands = max(20, vehicles + 5)
+            if max_candidates is not None:
+                cands = max(cands, int(max_candidates))
             f.write(f"MAX_CANDIDATES = {cands}\n") 
             
             f.write(f"VEHICLES = {max(1, int(vehicles))}\n")
