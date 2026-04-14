@@ -7,7 +7,7 @@ import shutil
 import stat
 from typing import List, Set, Tuple, Dict
 
-UINT32_MOD = 1 << 32
+UINT32_RANGE = 1 << 32
 
 class FSTA_Compressor:
     """
@@ -170,7 +170,7 @@ class FSTA_Compressor:
     def _format_returncode_as_hex(returncode: int) -> str:
         """Format return code as hex; negative values are mapped to unsigned 32-bit form (common on Windows)."""
         if returncode < 0:
-            return hex(UINT32_MOD + returncode)
+            return hex(UINT32_RANGE + returncode)
         return hex(returncode)
 
     def _classify_failure(self, returncode: int, stdout: str, stderr: str) -> str:
