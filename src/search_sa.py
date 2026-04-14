@@ -450,6 +450,8 @@ class Search:
         
         # 将这个极好的初始解复制 aug_factor 份
         base_solution = PurePythonSolution(init_tours, self.full_node_xy)
+        if (not np.isfinite(base_solution.totalCosts)) or (base_solution.totalCosts <= 0):
+            raise RuntimeError("Invalid initial solution generated for expert/SA loop.")
         self.my_python_solutions = [copy.deepcopy(base_solution) for _ in range(aug_factor)]
         print(f"✅ 初始解生成完毕！初始 Cost: {base_solution.totalCosts:.2f}")
 
@@ -551,7 +553,8 @@ class Search:
         # 这里约定 α_AC<=0 表示“不额外随机下采样”，即凡是通过 η_improv 的标签都保留。
         if alpha_ac <= 0.0:
             return True
-        return rng.random() <= min(alpha_ac, 1.0)
+        alpha_ac = min(alpha_ac, 1.0)
+        return rng.random() <= alpha_ac
 
     def _collect_expert_training_labels(
         self,
@@ -574,7 +577,11 @@ class Search:
             if len(involved_nodes) == 0:
                 continue
 
-            customer_nodes = [x for x in involved_nodes if x != 0]
+            customer_nodes = [
+                int(x)
+                for x in involved_nodes
+                if int(x) > 0 and int(x) <= int(self.env_params["problem_size"])
+            ]
             if len(customer_nodes) == 0:
                 continue
             idx_tensor = torch.tensor([x - 1 for x in customer_nodes], dtype=torch.long)

@@ -80,7 +80,7 @@ Windows 排查（LKH 崩溃 vs 数据参数崩溃）请参考：
 
 - `TIS = 40` → `nb_iterations=40`
 - `η_improv = 0` → `eta_improv=0.0`
-- `α_AC = 0`（small-capacity：论文中小容量设定的 CVRP/VRPTW 训练数据生成）→ `alpha_ac=0.0`  
+- `alpha_ac = 0`（论文表格记作 `α_AC`；small-capacity：小容量设定的 CVRP/VRPTW 训练数据生成）→ `alpha_ac=0.0`  
   （实现约定：`alpha_ac <= 0` 时不做额外随机下采样，即保留满足改进阈值的专家标签）
 
 ### 阶段 B：训练 L2Seg 模型
