@@ -176,7 +176,8 @@ class Search:
         for fallback in fallback_candidates:
             if os.path.exists(fallback):
                 self.logger.warning(
-                    f"Configured lkh_path not found: {lkh_path}. Falling back to {fallback}."
+                    f"Configured lkh_path not found: {lkh_path}. Falling back to {fallback}. "
+                    "If this is not expected, set tester_params.lkh_path to a valid executable path."
                 )
                 return fallback
 
