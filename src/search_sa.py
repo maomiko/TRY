@@ -550,7 +550,7 @@ class Search:
         if improvement < min_improvement:
             return False
 
-        alpha_ac = float(self.tester_params.get("alpha_ac", 1.0))
+        alpha_ac = float(self.tester_params.get("alpha_ac", 0.0))
         # 论文 D.3 中，small-capacity（如 CVRP/VRPTW 小容量设定）常配 α_AC=0。
         # Implementation: alpha_ac <= 0 means no extra random downsampling;
         # all labels passing eta_improv are retained.
@@ -588,6 +588,7 @@ class Search:
                     customer_nodes.append(x_int)
             if len(customer_nodes) == 0:
                 continue
+            # customer ID is 1..N; feature tensors are 0..N-1.
             idx_tensor = torch.tensor([x - 1 for x in customer_nodes], dtype=torch.long)
 
             g2l_map = {g_id: l_idx + 1 for l_idx, g_id in enumerate(customer_nodes)}
