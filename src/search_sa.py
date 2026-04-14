@@ -450,8 +450,10 @@ class Search:
         
         # 将这个极好的初始解复制 aug_factor 份
         base_solution = PurePythonSolution(init_tours, self.full_node_xy)
-        if (not np.isfinite(base_solution.totalCosts)) or (base_solution.totalCosts <= 0):
-            raise RuntimeError("Invalid initial solution generated for expert/SA loop.")
+        if not np.isfinite(base_solution.totalCosts):
+            raise RuntimeError("Initial solution has non-finite cost.")
+        if base_solution.totalCosts <= 0:
+            raise RuntimeError("Initial solution has non-positive cost.")
         self.my_python_solutions = [copy.deepcopy(base_solution) for _ in range(aug_factor)]
         print(f"✅ 初始解生成完毕！初始 Cost: {base_solution.totalCosts:.2f}")
 
@@ -549,8 +551,9 @@ class Search:
             return False
 
         alpha_ac = float(self.tester_params.get("alpha_ac", 1.0))
-        # 论文 D.3 中，small-capacity（如 CVRP1k/2k/5k 与 VRPTW 的小容量设定）常配 α_AC=0。
-        # 这里约定 α_AC<=0 表示“不额外随机下采样”，即凡是通过 η_improv 的标签都保留。
+        # 论文 D.3 中，small-capacity（如 CVRP/VRPTW 小容量设定）常配 α_AC=0。
+        # Implementation: alpha_ac <= 0 means no extra random downsampling;
+        # all labels passing eta_improv are retained.
         if alpha_ac <= 0.0:
             return True
         alpha_ac = min(alpha_ac, 1.0)
