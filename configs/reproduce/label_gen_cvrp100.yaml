@@ -51,10 +51,11 @@ tester_params:
   nar_threshold: 0.6
   n_kmeans: 3
 
-  # 论文 D.3: TIS=40（本仓库映射为 nb_iterations）
+  # 严格按作者口述：1000 cases × 25 iterations（25 个中间步骤）
   nb_instances: 1000
-  nb_iterations: 40
-  rollout_size: 40
+  nb_iterations: 25
+  # 每个 iteration 仅保留该步 solver 最终解用于下一步与打标
+  rollout_size: 1
   aug_factor: 1
   max_runtime: 0
 
