@@ -270,12 +270,13 @@ class FSTA_Compressor:
             print("判定: 非零退出但原因不明确，建议结合手工运行与多输入对比排查")
         print("=" * 80 + "\n")
 
-    def _run_lkh_once(self, par_path: str) -> subprocess.CompletedProcess:
+    def _run_lkh_once(self, par_path: str, timeout_sec: Optional[int] = None) -> subprocess.CompletedProcess:
+        effective_timeout = self.timeout_sec if timeout_sec is None else max(1, int(timeout_sec))
         return subprocess.run(
             [self.lkh_path, par_path],
             capture_output=True,
             text=True,
-            timeout=self.timeout_sec,
+            timeout=effective_timeout,
         )
 
     @staticmethod
@@ -428,6 +429,9 @@ class FSTA_Compressor:
                 flat.append(0)
             if flat:
                 flat.pop()
+            if not flat:
+                # 最终兜底：从期望客户集合重建一条可行扁平路线，绝不返回空解。
+                flat = [int(n) for n in expected_customers if 0 < int(n) <= max_customer_id]
             return flat
 
         # 1. 提取所有 Segment
@@ -639,6 +643,48 @@ class FSTA_Compressor:
             print(f"{e.stdout}")
             print(f"顺便检查一下容量参数对不对：Capacity = {self.capacity}")
             print("!"*60 + "\n")
+            # 超时后单次救援重试：放宽 VEHICLES / MAX_CANDIDATES，并给更长超时窗口。
+            try:
+                available_locals = locals()
+                if all(
+                    name in available_locals for name in
+                    ("par_path", "vrp_path", "out_path", "safe_vehicles", "min_required_vehicles", "max_feasible_vehicles")
+                ):
+                    retry_vehicles = self._calculate_retry_vehicles(
+                        safe_vehicles=safe_vehicles,
+                        min_required_vehicles=min_required_vehicles,
+                        max_feasible_vehicles=max_feasible_vehicles,
+                    )
+                    retry_max_candidates = max(
+                        max_feasible_vehicles,
+                        self._recommended_max_candidates(retry_vehicles),
+                    )
+                    print(
+                        "[LKH trace] timeout rescue retry with "
+                        f"VEHICLES={retry_vehicles}, MAX_CANDIDATES={retry_max_candidates}"
+                    )
+                    self._write_par(
+                        par_path,
+                        vrp_path,
+                        out_path,
+                        vehicles=retry_vehicles,
+                        max_candidates=retry_max_candidates,
+                    )
+                    retry_timeout = max(self.timeout_sec * 2, 90)
+                    retry_result = self._run_lkh_once(par_path, timeout_sec=retry_timeout)
+                    if retry_result.returncode == 0:
+                        retry_tour = self._parse_tour(out_path)
+                        if retry_tour:
+                            retry_recovered = self._recover_solution(retry_tour, new_to_global, segments)
+                            if self._is_valid_flat_tour(retry_recovered, expected_customers):
+                                print("[LKH trace] timeout rescue retry succeeded.")
+                                return retry_recovered
+                    else:
+                        self._log_process_result(retry_result)
+            except subprocess.TimeoutExpired:
+                print("[LKH trace] timeout rescue retry also timed out; fallback applied.")
+            except Exception as retry_err:
+                print(f"[LKH trace] timeout rescue retry failed: {retry_err}")
             return _fallback_tour(tours)
         except (FileNotFoundError, PermissionError, OSError) as e:
             print("\n" + "="*60)
