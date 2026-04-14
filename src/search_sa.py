@@ -41,9 +41,7 @@ class MockProblemFeat:
 class MockState:
     def __init__(self, problem_feat, neighbours, tour_index):
         self.problem_feat = problem_feat
-        if neighbours.dim() == 2:
-            neighbours = neighbours.unsqueeze(0)
-        self.neighbours = neighbours   # [B, N, 2]
+        self.neighbours = neighbours.unsqueeze(0) if neighbours.dim() == 2 else neighbours   # accepts [N, 2] or [B, N, 2]
         self.tour_index = tour_index.unsqueeze(0)   # [1, 100]
 
 def create_l2seg_input(nn_d_xy, nn_n_xy, nn_n_dem, device, k=20):
@@ -54,11 +52,10 @@ def create_l2seg_input(nn_d_xy, nn_n_xy, nn_n_dem, device, k=20):
     feat = MockProblemFeat(d_tensor, n_tensor, dem_tensor)
     tour_index = torch.zeros_like(dem_tensor, dtype=torch.long)
     
-    # 原版特征需要邻居形状为 [B, N, 2]；MockState 内部会额外 unsqueeze 一次
-    neighbours = torch.zeros((n_tensor.size(0), 2), dtype=torch.long, device=device)
-    batched_neighbours = neighbours.unsqueeze(0)
+    # Original features require neighbours with shape [B, N, 2].
+    batched_neighbours = torch.zeros((1, n_tensor.size(0), 2), dtype=torch.long, device=device)
     
-    # 👑 计算 100% 还原的论文特征
+    # Compute original L2Seg feature tensors.
     static_feats, dynamic_feats = compute_original_l2seg_features(
         feat.depot_xy, 
         feat.node_xy, 
@@ -67,7 +64,7 @@ def create_l2seg_input(nn_d_xy, nn_n_xy, nn_n_dem, device, k=20):
         batched_neighbours
     )
     
-    state = MockState(feat, neighbours, tour_index)
+    state = MockState(feat, batched_neighbours, tour_index)
     state.l2seg_static_feats = static_feats
     state.l2seg_dynamic_feats = dynamic_feats
     
