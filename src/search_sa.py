@@ -577,11 +577,12 @@ class Search:
             if len(involved_nodes) == 0:
                 continue
 
-            customer_nodes = [
-                int(x)
-                for x in involved_nodes
-                if int(x) > 0 and int(x) <= int(self.env_params["problem_size"])
-            ]
+            customer_nodes = []
+            max_node_id = int(self.env_params["problem_size"])
+            for x in involved_nodes:
+                x_int = int(x)
+                if 0 < x_int <= max_node_id:
+                    customer_nodes.append(x_int)
             if len(customer_nodes) == 0:
                 continue
             idx_tensor = torch.tensor([x - 1 for x in customer_nodes], dtype=torch.long)
