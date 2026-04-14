@@ -352,7 +352,7 @@ class Search:
             except (TypeError, ValueError):
                 continue
 
-            if node == 0 or node < 0 or node > num_customers:
+            if node <= 0 or node > num_customers:
                 if route:
                     tours.append(route)
                     route = []

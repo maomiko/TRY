@@ -119,8 +119,7 @@ def main():
         search = Search(env_params, tester_params)
         search._load_test_dataset()
 
-        depot_xy, node_xy, node_demand, capacity = search._get_instance_raw_data(args.instance_idx)
-        _ = depot_xy, node_demand, capacity
+        _, node_xy, _, _ = search._get_instance_raw_data(args.instance_idx)
         expected_customer_count = int(len(node_xy))
 
         result = search._solve_one_instance(args.instance_idx)

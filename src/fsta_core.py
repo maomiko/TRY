@@ -387,7 +387,7 @@ class FSTA_Compressor:
 
         for u, v in fixed_edges:
             ui, vi = int(u), int(v)
-            if ui < 1 or ui > n or vi < 1 or vi > n or ui == vi:
+            if ui < 1 or ui >= (n + 1) or vi < 1 or vi >= (n + 1) or ui == vi:
                 return False
         return True
 
