@@ -547,7 +547,8 @@ class Search:
             return False
 
         alpha_ac = float(self.tester_params.get("alpha_ac", 1.0))
-        # 论文中 small-capacity 常配 α_AC=0，这里约定为“不额外下采样”。
+        # 论文 D.3 中，small-capacity（如 CVRP1k/2k/5k 与 VRPTW 的小容量设定）常配 α_AC=0。
+        # 这里约定 α_AC<=0 表示“不额外随机下采样”，即凡是通过 η_improv 的标签都保留。
         if alpha_ac <= 0.0:
             return True
         return rng.random() <= min(alpha_ac, 1.0)
