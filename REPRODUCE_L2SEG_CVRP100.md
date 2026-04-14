@@ -52,6 +52,8 @@
 python eval.py --config configs/reproduce/label_gen_cvrp100.yaml --seed 1234
 ```
 
+说明：`eval.py` 默认配置已对齐为 `configs/reproduce/label_gen_cvrp100.yaml`。
+
 期望输出：
 
 - `results/l2seg_dataset/l2seg_training_data.pt`
