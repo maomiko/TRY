@@ -788,7 +788,8 @@ class Search:
             # 阶段二：KMeans 聚类与寻找引爆点 (Clustering & Initial Node Identification)
             # 提取候选节点的真实二维坐标用于空间聚类
             all_coords = reset_state.problem_feat.node_xy.squeeze(0).cpu().numpy()
-            # nar_probs 索引: 0=depot, 1..N=customers；node_xy 索引: 0..N-1=customers
+            # unstable_candidates 来自 nar_probs：0 表示 depot，1..N 表示客户。
+            # node_xy 是纯客户坐标数组，索引范围为 0..N-1，因此需减 1 做映射。
             candidate_customer_idx = unstable_candidates - 1
             candidate_coords = all_coords[candidate_customer_idx.cpu().numpy()]
             
