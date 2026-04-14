@@ -16,6 +16,7 @@ from torch.utils.data import Dataset, DataLoader
 
 
 from .model import Model
+from .env import Env
 from .logging_utils import (
     get_result_folder,
     TimeEstimator,
