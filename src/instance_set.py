@@ -2,20 +2,31 @@
 
 import math
 import multiprocessing
+import importlib
 from typing import List, Tuple, Any, Optional
 
 import cppimport.import_hook
 import numpy as np
 
 
+def _capacity_at(capacity, i: int) -> int:
+    """Extract integer vehicle capacity for instance index i."""
+    cap_arr = np.asarray(capacity)
+    if cap_arr.ndim == 0:
+        return int(cap_arr.item())
+    if cap_arr.size == 1:
+        return int(cap_arr.reshape(-1)[0])
+    return int(cap_arr.reshape(-1)[i])
+
+
 def _load_cpp_operations(problem: str):
     """Load problem-specific C++ operations module."""
     if problem == "cvrp":
-        from .cpp.cvrp import NDSOps
+        NDSOps = importlib.import_module("src.0.cpp.cvrp.NDSOps")
     elif problem == "vrptw":
-        from .cpp.vrptw import NDSOps
+        NDSOps = importlib.import_module("src.0.cpp.vrptw.NDSOps")
     elif problem == "pcvrp":
-        from .cpp.pcvrp import NDSOps
+        NDSOps = importlib.import_module("src.0.cpp.pcvrp.NDSOps")
     else:
         raise ValueError(f"Unsupported problem type: {problem}")
 
@@ -53,14 +64,14 @@ def _create_instance(
     if problem == "cvrp":
         return NDSOps.Instance(
             problem_size,
-            problem_data.capacity[i],
+            _capacity_at(problem_data.capacity, i),
             problem_data.depot_node_demand[i],
             problem_data.depot_node_xy[i],
         )
     elif problem == "vrptw":
         return NDSOps.Instance(
             problem_size,
-            problem_data.capacity[i],
+            _capacity_at(problem_data.capacity, i),
             problem_data.depot_node_demand[i],
             problem_data.depot_node_tw[i, :, 0],
             problem_data.depot_node_tw[i, :, 1],
@@ -70,7 +81,7 @@ def _create_instance(
     elif problem == "pcvrp":
         return NDSOps.Instance(
             problem_size,
-            problem_data.capacity[i],
+            _capacity_at(problem_data.capacity, i),
             problem_data.depot_node_demand[i],
             problem_data.depot_node_xy[i],
             problem_data.depot_node_prizes[i],
@@ -193,12 +204,15 @@ def _handle_new_instances(
     for i in range(depot_node_xy_np.shape[0]):
         if problem == "cvrp":
             instance = NDSOps.Instance(
-                problem_size, capacity[i], depot_node_demand_np[i], depot_node_xy_np[i]
+                problem_size,
+                _capacity_at(capacity, i),
+                depot_node_demand_np[i],
+                depot_node_xy_np[i],
             )
         elif problem == "vrptw":
             instance = NDSOps.Instance(
                 problem_size,
-                capacity[i],
+                _capacity_at(capacity, i),
                 depot_node_demand_np[i],
                 depot_node_tw_np[i, :, 0],
                 depot_node_tw_np[i, :, 1],
@@ -208,7 +222,7 @@ def _handle_new_instances(
         elif problem == "pcvrp":
             instance = NDSOps.Instance(
                 problem_size,
-                capacity[i],
+                _capacity_at(capacity, i),
                 depot_node_demand_np[i],
                 depot_node_xy_np[i],
                 depot_node_prizes_np[i],

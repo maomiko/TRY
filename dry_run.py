@@ -35,7 +35,7 @@ def run_dry_test():
 
     tester_params = {
         "aug_factor": 8,              # 注意！你老配置里增强因子是 8
-        "use_cuda": True,
+        "use_cuda": torch.cuda.is_available(),
         "cuda_device_num": 0,
         "use_baseline_destroy": False,
         "model_load": [],
