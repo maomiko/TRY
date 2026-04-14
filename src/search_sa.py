@@ -451,9 +451,9 @@ class Search:
         # 将这个极好的初始解复制 aug_factor 份
         base_solution = PurePythonSolution(init_tours, self.full_node_xy)
         if not np.isfinite(base_solution.totalCosts):
-            raise RuntimeError("Initial solution has non-finite cost.")
+            raise RuntimeError(f"Initial solution for instance {instance_idx} has non-finite cost.")
         if base_solution.totalCosts <= 0:
-            raise RuntimeError("Initial solution has non-positive cost.")
+            raise RuntimeError(f"Initial solution for instance {instance_idx} has non-positive cost.")
         self.my_python_solutions = [copy.deepcopy(base_solution) for _ in range(aug_factor)]
         print(f"✅ 初始解生成完毕！初始 Cost: {base_solution.totalCosts:.2f}")
 
@@ -581,10 +581,10 @@ class Search:
                 continue
 
             customer_nodes = []
-            max_node_id = int(self.env_params["problem_size"])
+            problem_size = int(self.env_params["problem_size"])
             for x in involved_nodes:
                 x_int = int(x)
-                if 0 < x_int <= max_node_id:
+                if 0 < x_int <= problem_size:
                     customer_nodes.append(x_int)
             if len(customer_nodes) == 0:
                 continue
