@@ -32,7 +32,7 @@ class L2SegDataset(Dataset):
         if not os.path.exists(data_path):
             raise FileNotFoundError(f"❌ 找不到训练数据: {data_path}")
         print(f"📦 正在加载数据集: {data_path}...")
-        self.data = torch.load(data_path)
+        self.data = torch.load(data_path, map_location="cpu", weights_only=True)
         print(f"✅ 成功加载 {len(self.data)} 个局部修复样本！")
 
     def __len__(self):
@@ -116,7 +116,9 @@ def train(config_path, seed=1234):
     epochs = trainer_params["epochs"]
     save_dir = trainer_params["checkpoint_dir"]
     os.makedirs(save_dir, exist_ok=True)
-    os.makedirs(os.path.dirname(trainer_params["metrics_csv"]), exist_ok=True)
+    metrics_dir = os.path.dirname(trainer_params["metrics_csv"])
+    if metrics_dir:
+        os.makedirs(metrics_dir, exist_ok=True)
 
     print(f"🔥 开始训练 (配置文件: {config_path})\n")
     if not os.path.exists(trainer_params["metrics_csv"]):
@@ -234,7 +236,7 @@ def train(config_path, seed=1234):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--config', type=str, default='configs/train/cvrp100.yaml')
+    parser.add_argument('--config', type=str, default='configs/reproduce/train_cvrp100.yaml')
     parser.add_argument('--seed', type=int, default=1234)
     args = parser.parse_args()
     train(args.config, seed=args.seed)

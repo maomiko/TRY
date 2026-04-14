@@ -179,7 +179,7 @@ def l2s_collate_fn(batch):
 
 class L2SDataset(Dataset):
     def __init__(self, data_path):
-        self.data = torch.load(data_path)
+        self.data = torch.load(data_path, map_location="cpu", weights_only=True)
         
     def __len__(self):
         return len(self.data)
