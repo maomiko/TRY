@@ -8,6 +8,7 @@ import stat
 from typing import List, Set, Tuple, Dict, Optional
 
 UINT32_MODULUS = 1 << 32
+UINT32_MASK = 0xFFFFFFFF
 WINDOWS_ACCESS_VIOLATION = -1073741819  # 0xC0000005
 WINDOWS_STACK_BUFFER_OVERRUN = -1073740791  # 0xC0000409
 WINDOWS_ACCESS_VIOLATION_U32 = 0xC0000005
@@ -178,7 +179,7 @@ class FSTA_Compressor:
         return hex(returncode)
 
     def _classify_failure(self, returncode: int, stdout: str, stderr: str) -> str:
-        returncode_unsigned = int(returncode) & 0xFFFFFFFF
+        returncode_unsigned = int(returncode) & UINT32_MASK
         if (
             returncode in (WINDOWS_ACCESS_VIOLATION, WINDOWS_STACK_BUFFER_OVERRUN)
             or returncode_unsigned in (WINDOWS_ACCESS_VIOLATION_U32, WINDOWS_STACK_BUFFER_OVERRUN_U32)
@@ -569,18 +570,18 @@ class FSTA_Compressor:
                         process_result.stdout or "",
                         process_result.stderr or "",
                     ):
-                        expanded_candidates = max_feasible_vehicles
-                        if expanded_candidates > base_max_candidates:
+                        retry_max_candidates = max_feasible_vehicles
+                        if retry_max_candidates > base_max_candidates:
                             print(
                                 "[LKH trace] no-candidates detected, retry once with "
-                                f"MAX_CANDIDATES={expanded_candidates}"
+                                f"MAX_CANDIDATES={retry_max_candidates}"
                             )
                             self._write_par(
                                 par_path,
                                 vrp_path,
                                 out_path,
                                 vehicles=safe_vehicles,
-                                max_candidates=expanded_candidates,
+                                max_candidates=retry_max_candidates,
                             )
                             process_result = self._run_lkh_once(par_path)
                             if process_result.returncode == 0:
@@ -776,7 +777,7 @@ class FSTA_Compressor:
             f.write("RUNS = 1\nTIME_LIMIT = 10\nTRACE_LEVEL = 0\n")
             
             # 👑 突破“假车场黑洞”：视距必须穿透所有的假车场，再额外看到 5 个真实客户！
-            cands = max(20, vehicles + 5)
+            cands = self._recommended_max_candidates(vehicles)
             if max_candidates is not None:
                 cands = max(cands, int(max_candidates))
             f.write(f"MAX_CANDIDATES = {cands}\n") 
