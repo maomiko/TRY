@@ -10,12 +10,21 @@ class FSTA_Compressor:
     """
     严谨对齐 L2Seg 论文的 First-Segment-Then-Aggregate 算法
     """
-    def __init__(self, node_xy: np.ndarray, node_demand: np.ndarray, capacity: int, lkh_path: str = "./LKH-3.exe", max_vehicles: int = 50):
+    def __init__(
+        self,
+        node_xy: np.ndarray,
+        node_demand: np.ndarray,
+        capacity: int,
+        lkh_path: str = "./LKH-3.exe",
+        max_vehicles: int = 50,
+        timeout_sec: int = 15,
+    ):
         self.node_xy = node_xy
         self.node_demand = node_demand
         self.capacity = capacity
         self.lkh_path = lkh_path
         self.max_vehicles = max_vehicles
+        self.timeout_sec = max(1, int(timeout_sec))
 
     def _extract_segments(self, tours: List[List[int]], destroyed_nodes: Set[int]) -> List[List[int]]:
         """
@@ -153,10 +162,10 @@ class FSTA_Compressor:
                 self._write_par(par_path, vrp_path, out_path, vehicles=safe_vehicles)
             
                 process_result = subprocess.run(
-                    [self.lkh_path, par_path], 
-                    capture_output=True, 
+                    [self.lkh_path, par_path],
+                    capture_output=True,
                     text=True,
-                    timeout=15
+                    timeout=self.timeout_sec
                 )
             
                 # 👑 核心防御：如果 LKH 底层崩溃，绝对不能交白卷！必须触发平滑回退
@@ -183,6 +192,13 @@ class FSTA_Compressor:
                 
 
                 # 👑 核心修复 2：回退时，必须把二维的 tours 拍平成一维（用 0 隔开），无缝喂给外面的代码！
+                return _fallback_tour(tours)
+            except (FileNotFoundError, PermissionError, OSError) as e:
+                print("\n" + "="*60)
+                print("💀 LKH-3 不可执行或缺失，已成功拦截，正在平滑回退。")
+                print(f"👉 错误原因: {e}")
+                print(f"👉 当前 LKH 路径: {self.lkh_path}")
+                print("="*60 + "\n")
                 return _fallback_tour(tours)
 
 

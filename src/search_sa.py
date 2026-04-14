@@ -350,14 +350,17 @@ class Search:
         # ==========================================
         # [纯 Python 重构] 2. 初始化 LKH-3
         # ==========================================
-        lkh_node_xy = self.full_node_xy.astype(np.int64)
+        lkh_node_xy = self.full_node_xy.astype(np.float32)
         lkh_demand = np.concatenate(([0], raw_n_dem)).astype(np.int64)
+        lkh_timeout_sec = int(self.tester_params.get("lkh_timeout_sec", 60))
+        lkh_path = self.tester_params.get("lkh_path", self.env_params.get("lkh_path", "./LKH-3.exe"))
 
         self.fsta_compressor = FSTA_Compressor(
             node_xy=lkh_node_xy,
             node_demand=lkh_demand,
             capacity=int(raw_capacity),
-            lkh_path="./LKH-3.exe" ,
+            lkh_path=lkh_path,
+            timeout_sec=lkh_timeout_sec,
             max_vehicles=self.env_params.get("max_vehicles", 50)
         )
 
