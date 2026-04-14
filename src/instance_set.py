@@ -16,7 +16,12 @@ def _capacity_at(capacity, i: int) -> int:
         return int(cap_arr.item())
     if cap_arr.size == 1:
         return int(cap_arr.reshape(-1)[0])
-    return int(cap_arr.reshape(-1)[i])
+    flat = cap_arr.reshape(-1)
+    if i < 0 or i >= flat.size:
+        raise IndexError(
+            f"Capacity index out of range: i={i}, capacity_size={flat.size}"
+        )
+    return int(flat[i])
 
 
 def _load_cpp_operations(problem: str):
@@ -60,7 +65,7 @@ def _create_starting_solution(
 def _create_instance(
     NDSOps, problem: str, problem_size: int, i: int, problem_data
 ) -> Any:
-    """Create a single c++ instance objecte based on problem type."""
+    """Create a single c++ instance object based on problem type."""
     if problem == "cvrp":
         return NDSOps.Instance(
             problem_size,
