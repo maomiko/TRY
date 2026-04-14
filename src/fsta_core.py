@@ -178,10 +178,10 @@ class FSTA_Compressor:
         return hex(returncode)
 
     def _classify_failure(self, returncode: int, stdout: str, stderr: str) -> str:
-        returncode_u32 = int(returncode) & 0xFFFFFFFF
+        returncode_unsigned = int(returncode) & 0xFFFFFFFF
         if (
             returncode in (WINDOWS_ACCESS_VIOLATION, WINDOWS_STACK_BUFFER_OVERRUN)
-            or returncode_u32 in (WINDOWS_ACCESS_VIOLATION_U32, WINDOWS_STACK_BUFFER_OVERRUN_U32)
+            or returncode_unsigned in (WINDOWS_ACCESS_VIOLATION_U32, WINDOWS_STACK_BUFFER_OVERRUN_U32)
         ):
             return "lkh_process_crash"
 
@@ -204,6 +204,10 @@ class FSTA_Compressor:
     def _is_no_candidates_failure(stdout: str, stderr: str) -> bool:
         msg = f"{stdout}\n{stderr}".lower()
         return "no candidates" in msg
+
+    @staticmethod
+    def _recommended_max_candidates(vehicles: int) -> int:
+        return max(20, int(vehicles) + 5)
 
     @staticmethod
     def _extract_head_tail_lines(text: str, line_count: int = 50) -> Tuple[List[str], List[str]]:
@@ -532,7 +536,7 @@ class FSTA_Compressor:
                 return _fallback_tour(tours)
 
             self._write_explicit_vrp(vrp_path, num_new_nodes, distances, demands, fixed_edges_lkh)
-            base_max_candidates = max(20, safe_vehicles + 5)
+            base_max_candidates = self._recommended_max_candidates(safe_vehicles)
             self._write_par(
                 par_path,
                 vrp_path,
@@ -600,7 +604,7 @@ class FSTA_Compressor:
                                 vrp_path,
                                 out_path,
                                 vehicles=retry_vehicles,
-                                max_candidates=max(20, retry_vehicles + 5),
+                                max_candidates=self._recommended_max_candidates(retry_vehicles),
                             )
                             process_result = self._run_lkh_once(par_path)
                             if process_result.returncode == 0:
