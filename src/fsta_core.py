@@ -35,6 +35,7 @@ class FSTA_Compressor:
         self.lkh_path = self._resolve_lkh_path(lkh_path)
         self.max_vehicles = max_vehicles
         self.timeout_sec = max(1, int(timeout_sec))
+        self._disable_lkh = False
 
     def _is_windows_exe(self, path: str) -> bool:
         return path.lower().endswith(".exe")
@@ -434,6 +435,9 @@ class FSTA_Compressor:
                 flat = [int(n) for n in expected_customers if 0 < int(n) <= max_customer_id]
             return flat
 
+        if self._disable_lkh:
+            return _fallback_tour(tours)
+
         # 1. 提取所有 Segment
         segments = self._extract_segments(tours, destroyed_nodes)
         
@@ -621,12 +625,24 @@ class FSTA_Compressor:
 
             # 👑 核心防御：如果 LKH 底层崩溃，绝对不能交白卷！必须触发平滑回退
             if process_result.returncode != 0:
+                final_classification = self._classify_failure(
+                    process_result.returncode,
+                    process_result.stdout or "",
+                    process_result.stderr or "",
+                )
+                if final_classification == "lkh_process_crash":
+                    print(
+                        "[LKH trace] detected native crash; disable LKH and use fallback repair for "
+                        "subsequent iterations."
+                    )
+                    self._disable_lkh = True
                 return _fallback_tour(tours)
 
             # 5. 读取与无损解码
             lkh_tour_new = self._parse_tour(out_path)
             if not lkh_tour_new:
                 print("[LKH trace] empty/invalid TOUR_FILE content; fallback applied.")
+                self._disable_lkh = True
                 return _fallback_tour(tours)
 
             recovered = self._recover_solution(lkh_tour_new, new_to_global, segments)

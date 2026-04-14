@@ -2,6 +2,8 @@
 
 论文：`2507.01037v2.pdf`
 
+执行层面的依赖安装与全流程操作说明见：`FULLFLOW_OPERATION_GUIDE.md`
+
 ## 1) 复现目标与成功标准
 
 本仓库复现目标定义为：
@@ -17,7 +19,7 @@
 
 - `η (NAR threshold) = 0.6`
 - `n_kmeans = 3`
-- 训练数据生成迭代步：`TIS = 40`（在本仓库映射为 `nb_iterations=40`）
+- 训练数据生成迭代步：`TIS = 25`（在本仓库映射为 `nb_iterations=25`）
 - 训练优化器：`ADAM`
 - 小规模 CVRP 学习率：`1e-4`
 - 训练 epoch：`200`
@@ -33,7 +35,7 @@
 |---|---:|---|---|
 | NAR threshold `η` | 0.6 | `nar_threshold=0.6` | `label_gen_cvrp100.yaml` / `eval_ai_cvrp100.yaml` |
 | `nKMEANS` | 3 | `n_kmeans=3` | `label_gen_cvrp100.yaml` / `eval_ai_cvrp100.yaml` |
-| TIS | 40 | `nb_iterations=40` | `label_gen_cvrp100.yaml` / `eval_ai_cvrp100.yaml` |
+| TIS（训练集生成） | 25 | `nb_iterations=25` | `label_gen_cvrp100.yaml` |
 | Optimizer | ADAM | `optim.Adam` | `train.py` |
 | Epochs | 200 | `epochs=200` | `train_cvrp100.yaml` |
 | Learning rate（small CVRP） | 1e-4 | `learning_rate=1e-4` | `train_cvrp100.yaml` |
@@ -78,7 +80,8 @@ Windows 排查（LKH 崩溃 vs 数据参数崩溃）请参考：
 
 论文参数对齐（D.3，数据生成）：
 
-- `TIS = 40` → `nb_iterations=40`
+- `TIS = 25` → `nb_iterations=25`
+- `1000 cases × 25 iterations`（每个 case 产出 25 个中间步骤）
 - `η_improv = 0` → `eta_improv=0.0`
 - `alpha_ac = 0`（论文表格记作 `α_AC`；small-capacity：小容量设定的 CVRP/VRPTW 训练数据生成）→ `alpha_ac=0.0`  
   （实现约定：`alpha_ac <= 0` 时不做额外随机下采样，即保留满足改进阈值的专家标签）
@@ -143,7 +146,7 @@ python repro_min_case.py \
 脚本行为：
 
 - 强制单实例、单进程、固定种子、CPU、基线破坏策略（不依赖模型 checkpoint）
-- 运行一次最小 SA 求解流程
+- 运行一次最小专家迭代求解流程（不含 SA 接受/降温）
 - 自动校验：
   - `cost` 为有限正数（拒绝 `0.00` 幽灵解）
   - 解不为空

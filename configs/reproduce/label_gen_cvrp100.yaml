@@ -39,30 +39,28 @@ tester_params:
   deterministic: true
   use_cuda: false
   cuda_device_num: 0
-  # 独立专家模式数据生成（与 SA 接受逻辑解耦）
+  # 专家模式数据生成（论文 Algorithm 2: R <- R+）
   expert_data_mode: true
   use_baseline_destroy: true
   model_load: []
   l2s_data_save_path: "results/l2seg_dataset/l2seg_training_data.pt"
 
-  # 论文 Algorithm 2（D.3）：η_improv / α_AC
+  # 论文 Algorithm 2（D.3）核心参数
   eta_improv: 0.0
   alpha_ac: 0.0
   nar_threshold: 0.6
   n_kmeans: 3
 
-  # 论文 D.3: TIS=40（本仓库直接映射到 nb_iterations）
+  # 严格按作者口述：1000 cases × 25 iterations（25 个中间步骤）
   nb_instances: 1000
-  nb_iterations: 40
-  rollout_size: 40
+  nb_iterations: 25
+  # 每个 iteration 仅保留该步 solver 最终解用于下一步与打标
+  rollout_size: 1
   aug_factor: 1
   max_runtime: 0
 
-  SA_start_T: 100
-  SA_final_T: 1
-  SA_delta: 0.1
   softmax_temp: 1.0
-  lkh_path: "./LKH-3"
+  lkh_path: "C:\\path\\to\\LKH-3.exe"  # TODO: 替换为你本机可执行的 LKH-3.exe 绝对路径
 
   test_data_load:
     enable: true

@@ -1,4 +1,4 @@
-"""Simulated Annealing search for solving VRP instances one at a time."""
+"""Iterative destroy-repair search for solving VRP instances one at a time."""
 
 import os
 import glob
@@ -10,7 +10,7 @@ import copy
 import csv
 import pickle
 from logging import getLogger
-from typing import List, Dict, Any, Tuple, Optional
+from typing import List, Dict, Any, Tuple, Optional, Set
 
 import numpy as np
 import torch
@@ -29,9 +29,6 @@ from .seed_sampler import SeedVectorSampler
 from .label_generator import L2SegLabelGenerator
 
 from .fsta_core import FSTA_Compressor
-
-MIN_SA_TEMPERATURE = 1e-12
-
 
 class MockProblemFeat:
     def __init__(self, depot_xy, node_xy, node_demand):
@@ -97,7 +94,7 @@ class PurePythonSolution:
 
 
 class Search:
-    """Simulated Annealing search that solves one VRP instance at a time."""
+    """Iterative search that solves one VRP instance at a time."""
 
     def __init__(
         self,
@@ -151,10 +148,41 @@ class Search:
         self.test_dataset = None
         self.test_dataset_size = None
 
+        self.lkh_path = self._resolve_lkh_path()
+
         
        
 
         
+
+    def _resolve_lkh_path(self) -> str:
+        """Resolve lkh_path with env expansion and safe fallback."""
+        if "lkh_path" in self.tester_params:
+            raw_path = self.tester_params["lkh_path"]
+        elif "lkh_path" in self.env_params:
+            raw_path = self.env_params["lkh_path"]
+        else:
+            raw_path = "./LKH-3"
+        lkh_path = str(raw_path).strip()
+        lkh_path = os.path.expanduser(os.path.expandvars(lkh_path))
+
+        if os.path.exists(lkh_path):
+            return lkh_path
+
+        fallback_candidates = [os.path.abspath("./LKH-3"), os.path.abspath("./LKH-3.exe")]
+        for fallback in fallback_candidates:
+            if os.path.exists(fallback):
+                self.logger.warning(
+                    f"Configured lkh_path not found: {lkh_path}. Falling back to {fallback}. "
+                    "If this is not expected, set tester_params.lkh_path to a valid executable path."
+                )
+                return fallback
+
+        raise FileNotFoundError(
+            f"LKH executable not found: configured={lkh_path}, "
+            f"fallbacks={fallback_candidates}. "
+            "Please set tester_params.lkh_path to a valid executable path."
+        )
 
     def _setup_device(self) -> torch.device:
         """Setup and return the compute device (CPU or CUDA)."""
@@ -471,19 +499,100 @@ class Search:
             return None
         return tours if tours else None
 
+    @staticmethod
+    def _flatten_tours(tours: List[List[int]]) -> List[int]:
+        return [int(node) for route in tours for node in route]
+
+    @staticmethod
+    def _rebuild_tours_with_template(flat_nodes: List[int], template_tours: List[List[int]]) -> List[List[int]]:
+        rebuilt = []
+        cursor = 0
+        for route in template_tours:
+            route_len = len(route)
+            rebuilt.append(flat_nodes[cursor : cursor + route_len])
+            cursor += route_len
+        return rebuilt
+
+    def _route_cost(self, route: List[int]) -> float:
+        if not route:
+            return 0.0
+        full = [0] + [int(n) for n in route] + [0]
+        cost = 0.0
+        for i in range(len(full) - 1):
+            cost += float(np.linalg.norm(self.full_node_xy[full[i]] - self.full_node_xy[full[i + 1]]))
+        return cost
+
+    def _two_opt_improve_route(self, route: List[int], max_passes: int = 2) -> List[int]:
+        if len(route) < 4:
+            return list(route)
+        best = list(route)
+        best_cost = self._route_cost(best)
+
+        for _ in range(max_passes):
+            improved = False
+            n = len(best)
+            for i in range(0, n - 2):
+                for j in range(i + 2, n):
+                    if i == 0 and j == n - 1:
+                        continue
+                    candidate = best[: i + 1] + best[i + 1 : j + 1][::-1] + best[j + 1 :]
+                    candidate_cost = self._route_cost(candidate)
+                    if candidate_cost + 1e-9 < best_cost:
+                        best = candidate
+                        best_cost = candidate_cost
+                        improved = True
+                        break
+                if improved:
+                    break
+            if not improved:
+                break
+        return best
+
+    def _python_repair_fallback(
+        self,
+        tours_before: List[List[int]],
+        destroyed_nodes: Set[int],
+        rng: random.Random,
+    ) -> List[List[int]]:
+        repaired = [list(route) for route in tours_before]
+        changed = False
+
+        for idx, route in enumerate(repaired):
+            if not route:
+                continue
+            if destroyed_nodes and not any(int(n) in destroyed_nodes for n in route):
+                continue
+            improved_route = self._two_opt_improve_route(route)
+            if improved_route != route:
+                repaired[idx] = improved_route
+                changed = True
+
+        if changed:
+            return repaired
+
+        flat_nodes = self._flatten_tours(tours_before)
+        if len(flat_nodes) < 2:
+            return repaired
+
+        candidate_positions = [i for i, node in enumerate(flat_nodes) if int(node) in destroyed_nodes]
+        if len(candidate_positions) < 2:
+            candidate_positions = list(range(len(flat_nodes)))
+
+        i, j = rng.sample(candidate_positions, 2)
+        flat_nodes[i], flat_nodes[j] = flat_nodes[j], flat_nodes[i]
+        return self._rebuild_tours_with_template(flat_nodes, tours_before)
+
     def _solve_one_instance(self, instance_idx: int) -> Dict[str, Any]:
         """
-        Solve a single VRP instance using Simulated Annealing with learned destroy operations.
+        Solve a single VRP instance using iterative destroy-repair with learned destroy operations.
 
         Returns dictionary with 'cost', 'runtime', 'nb_iterations', 'solution'.
         """
         aug_factor = self.tester_params["aug_factor"]
         max_iterations = self.tester_params["nb_iterations"]
         rollout_size = self.tester_params["rollout_size"]
-
-        # Initialize SA parameters
-        sa_config = self._init_simulated_annealing()
-        expert_data_mode = bool(self.tester_params.get("expert_data_mode", False))
+        max_runtime = float(self.tester_params.get("max_runtime", 0))
+        runtime_limited = max_runtime > 0
 
         start_time = time.time()
 
@@ -501,7 +610,7 @@ class Search:
         lkh_node_xy = self.full_node_xy.astype(np.float32)
         lkh_demand = np.concatenate(([0], raw_n_dem)).astype(np.int64)
         lkh_timeout_sec = int(self.tester_params.get("lkh_timeout_sec", 60))
-        lkh_path = self.tester_params.get("lkh_path", self.env_params.get("lkh_path", "./LKH-3"))
+        lkh_path = self.lkh_path
 
         self.fsta_compressor = FSTA_Compressor(
             node_xy=lkh_node_xy,
@@ -562,7 +671,7 @@ class Search:
         incumbent_cost = base_solution.totalCosts
         incumbent_solution = copy.deepcopy(base_solution)
 
-        # Simulated Annealing loop
+        # Iterative search loop
         seed_input = f"{self.seed}:{int(instance_idx)}".encode("utf-8")
         local_seed = int(hashlib.sha256(seed_input).hexdigest()[:16], 16)
         local_rng = random.Random(local_seed)
@@ -570,70 +679,23 @@ class Search:
         while iteration < max_iterations:
 
             if iteration % 5 == 0:
-                loop_name = "专家迭代" if expert_data_mode else "SA 退火迭代"
-                print(f" 实例 {instance_idx} | {loop_name}: {iteration}/{max_iterations} | 当前最佳 Cost: {incumbent_cost:.2f}")
-
-            if expert_data_mode:
-                # 论文 Algorithm 2 风格：R <- R+，独立于退火接受逻辑
-                new_solutions = self._perform_sa_iteration(
-                    aug_factor, rollout_size, sa_config["T"], local_rng
-                )
-                self.my_python_solutions = new_solutions
-
-                for sol in new_solutions:
-                    if sol.totalCosts < incumbent_cost:
-                        incumbent_cost = sol.totalCosts
-                        incumbent_solution = sol
-            else:
-                # Perform one SA iteration
-                new_solutions = self._perform_sa_iteration(
-                    aug_factor, rollout_size, sa_config["T"], local_rng
+                print(
+                    f" 实例 {instance_idx} | 专家迭代: {iteration}/{max_iterations} | 当前最佳 Cost: {incumbent_cost:.2f}"
                 )
 
-                # SA 接受/拒绝：Metropolis 准则
-                current_temp = max(float(sa_config["T"]), MIN_SA_TEMPERATURE)
-                accepted_solutions = []
-                for old_sol, new_sol in zip(self.my_python_solutions, new_solutions):
-                    old_cost = old_sol.totalCosts
-                    new_cost = new_sol.totalCosts
-                    delta_cost = new_cost - old_cost
+            # 论文 Algorithm 2 风格：R <- R+，不使用 SA 接受/降温逻辑
+            new_solutions = self._perform_iteration(aug_factor, rollout_size, local_rng)
+            self.my_python_solutions = new_solutions
 
-                    accept = False
-                    if delta_cost <= 0:
-                        accept = True
-                    else:
-                        accept_prob = float(np.exp(-delta_cost / current_temp))
-                        accept = local_rng.random() < accept_prob
-
-                    accepted_solutions.append(new_sol if accept else old_sol)
-
-                # Update incumbent
-                for sol in accepted_solutions:
-                    if sol.totalCosts < incumbent_cost:
-                        incumbent_cost = sol.totalCosts
-                        incumbent_solution = sol
-
-                # Synchronize augmented solutions (only when aug_factor > 1)
-                if aug_factor > 1:
-                    self._synchronize_augmented_solutions(
-                        accepted_solutions, sa_config["T"], sa_config["delta"]
-                    )
-
-                # Update solutions in environment
-                self.my_python_solutions = accepted_solutions
-
-                # Update temperature
-                sa_config["T"] = self._update_temperature(
-                    sa_config, iteration, start_time, max_iterations
-                )
+            for sol in new_solutions:
+                if sol.totalCosts < incumbent_cost:
+                    incumbent_cost = sol.totalCosts
+                    incumbent_solution = sol
 
             iteration += 1
 
             # Check runtime limit
-            if (
-                sa_config["runtime_limited"]
-                and (time.time() - start_time) > sa_config["max_runtime"]
-            ):
+            if runtime_limited and (time.time() - start_time) > max_runtime:
                 break
 
         runtime = time.time() - start_time
@@ -718,32 +780,8 @@ class Search:
                 }
             )
 
-    def _init_simulated_annealing(self) -> Dict[str, Any]:
-        """Initialize Simulated Annealing parameters."""
-        max_runtime = self.tester_params["max_runtime"]
-        runtime_limited = max_runtime > 0
-
-        T_0 = self.tester_params["SA_start_T"]
-        T_f = self.tester_params["SA_final_T"]
-
-        config = {
-            "T": T_0,
-            "T_0": T_0,
-            "T_f": T_f,
-            "delta": self.tester_params["SA_delta"],
-            "max_runtime": max_runtime,
-            "runtime_limited": runtime_limited,
-        }
-
-        # Compute cooling rate if not runtime-limited
-        if not runtime_limited:
-            nb_iterations = self.tester_params["nb_iterations"]
-            config["cooling_rate"] = (T_f / T_0) ** (1 / nb_iterations)
-
-        return config
-
-    def _perform_sa_iteration(
-        self, aug_factor: int, rollout_size: int, temperature: float, rng: random.Random
+    def _perform_iteration(
+        self, aug_factor: int, rollout_size: int, rng: random.Random
     ) -> List[Any]:
         use_ai_accelerator = (len(self.destroy_operators) > 0) and (not self.tester_params.get("use_baseline_destroy", True))
 
@@ -891,6 +929,13 @@ class Search:
                 )
                 new_tours = copy.deepcopy(tours_before)
 
+            if new_tours == tours_before:
+                new_tours = self._python_repair_fallback(
+                    tours_before=tours_before,
+                    destroyed_nodes=set(flattened_nodes),
+                    rng=rng,
+                )
+
             # --- 更新解对象 ---
             # 这里非常关键：你需要使用你项目中更新路径的方法
             # 如果你使用的是 InstanceSet 维护的解，可能需要类似下面的操作：
@@ -923,7 +968,7 @@ class Search:
         model = operator["model"]
 
         
-        # 直接使用传入的 reset_state，保护 SA 现场不被破坏！
+        # 直接使用传入的 reset_state，保护当前迭代现场不被破坏！
 
         # 论文推荐超参数（支持通过 tester_params 覆盖）
         eta = float(self.tester_params.get("nar_threshold", 0.6))
@@ -1007,51 +1052,6 @@ class Search:
         clean_selected_nodes = [list(final_destroyed_nodes) for _ in range(aug_factor)]
 
         return clean_selected_nodes
-    def _synchronize_augmented_solutions(
-        self, solutions: List[Any], temperature: float, delta: float
-    ) -> None:
-        """
-        Synchronize solutions across augmentations by replacing poor solutions
-        with good candidates (within temperature threshold).
-        """
-        costs = np.array([sol.totalCosts for sol in solutions])
-        min_cost = np.min(costs)
-
-        # Find candidate solutions (within threshold)
-        threshold = min_cost + temperature * delta
-        candidate_indices = np.where(costs < threshold)[0]
-
-        if len(candidate_indices) == 0:
-            return
-
-        # Replace solutions that are too expensive
-        for idx in range(len(solutions)):
-            if costs[idx] > threshold:
-                replacement_idx = np.random.choice(candidate_indices)
-                solutions[idx] = solutions[replacement_idx]
-
-    def _update_temperature(
-        self,
-        sa_config: Dict[str, Any],
-        iteration: int,
-        start_time: float,
-        max_iterations: int,
-    ) -> float:
-        """Update and return new temperature for Simulated Annealing."""
-        if sa_config["runtime_limited"]:
-            # Runtime-based cooling schedule
-            elapsed = time.time() - start_time
-            max_runtime = sa_config["max_runtime"]
-            progress = min(1.0, elapsed / max_runtime)
-            T = sa_config["T_f"] * (sa_config["T_0"] / sa_config["T_f"]) ** (
-                1 - progress
-            )
-        else:
-            # Iteration-based geometric cooling
-            T = sa_config["T"] * sa_config["cooling_rate"]
-
-        return T
-
     def _log_instance_progress(
         self,
         instance_idx: int,
