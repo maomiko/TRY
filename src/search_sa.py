@@ -326,6 +326,50 @@ class Search:
         capacity = float(self.test_dataset["capacity"][instance_idx].item())
         return depot_xy, node_xy, node_demand, capacity
 
+    def _decode_and_validate_tours(
+        self,
+        flat_tour: List[int],
+        num_customers: int,
+        expected_customers: Optional[List[int]] = None,
+    ) -> Optional[List[List[int]]]:
+        if expected_customers is None:
+            expected_set = set(range(1, num_customers + 1))
+        else:
+            expected_set = {
+                int(n)
+                for n in expected_customers
+                if 0 < int(n) <= num_customers
+            }
+        if not expected_set:
+            return None
+
+        tours = []
+        route = []
+        seen = set()
+        for raw in flat_tour:
+            try:
+                node = int(raw)
+            except (TypeError, ValueError):
+                continue
+
+            if node <= 0 or node > num_customers:
+                if route:
+                    tours.append(route)
+                    route = []
+                continue
+
+            if node in seen:
+                return None
+            seen.add(node)
+            route.append(node)
+
+        if route:
+            tours.append(route)
+
+        if seen != expected_set:
+            return None
+        return tours if tours else None
+
     def _solve_one_instance(self, instance_idx: int) -> Dict[str, Any]:
         """
         Solve a single VRP instance using Simulated Annealing with learned destroy operations.
@@ -395,16 +439,13 @@ class Search:
         if instance_idx == 0:
             self.logger.info("正在为所有图生成 LKH 初始解")
         initial_flat_tour = self.fsta_compressor.run_fsta_reoptimization(naive_tour, all_nodes_set)
-        
-        # 提取初始路径
-        init_tours = []
-        temp_route = []
-        for node in initial_flat_tour:
-            if node == 0:
-                if temp_route: init_tours.append(temp_route); temp_route = []
-            else:
-                temp_route.append(node)
-        if temp_route: init_tours.append(temp_route)
+
+        init_tours = self._decode_and_validate_tours(initial_flat_tour, num_customers)
+        if init_tours is None:
+            self.logger.warning(
+                "LKH initial tour invalid/empty; falling back to naive tour for this instance."
+            )
+            init_tours = copy.deepcopy(naive_tour)
         
         # 将这个极好的初始解复制 aug_factor 份
         base_solution = PurePythonSolution(init_tours, self.full_node_xy)
@@ -646,21 +687,18 @@ class Search:
                 tours_before, 
                 set(flattened_nodes)
             )
-            
 
-            # --- 将平铺数组重新切分为二维路径列表 ---
-            new_tours = []
-            temp_route = []
-            for node in recovered_flat_tour:
-                if node == 0:
-                    if temp_route:
-                        new_tours.append(temp_route)
-                        temp_route = []
-                else:
-                    temp_route.append(node)
-            # 处理最后一个未闭合的路径
-            if temp_route:
-                new_tours.append(temp_route)
+            expected_nodes = [n for t in tours_before for n in t if 0 < n <= num_customers]
+            new_tours = self._decode_and_validate_tours(
+                recovered_flat_tour,
+                num_customers,
+                expected_customers=expected_nodes,
+            )
+            if new_tours is None:
+                self.logger.warning(
+                    "Repaired tour invalid/empty; keeping previous feasible solution."
+                )
+                new_tours = copy.deepcopy(tours_before)
 
             # --- 更新解对象 ---
             # 这里非常关键：你需要使用你项目中更新路径的方法
