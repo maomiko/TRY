@@ -731,21 +731,20 @@ class FSTA_Compressor:
         步骤 4：解映射 (Solution Recovery)
         将超节点重新展开为完整的物理节点段，并彻底清洗 LKH 产生的假车场。
         """
-        # 转回全局 ID
+        # 转回全局 ID（未映射节点一律视为车场分隔符，避免假车场误映射到真实客户）
         global_tour = []
         for n in lkh_tour_new:
-            if n == 1: # 忽略 LKH 原生的真车场
+            nid = int(n)
+            if nid == 1:
+                global_tour.append(0)
                 continue
-            
-            # 检查映射表
-            if n in new_to_global:
-                val = new_to_global[n]
-            elif (n - 1) in new_to_global:
-                val = new_to_global[n - 1]
+
+            if nid in new_to_global:
+                val = new_to_global[nid]
             else:
-                val = n
-            
-            # 如果映射出来的是一个段（list），则平铺展开；如果是单点，直接加入
+                global_tour.append(0)
+                continue
+
             if isinstance(val, list):
                 global_tour.extend(val)
             else:
