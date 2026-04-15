@@ -408,6 +408,24 @@ class Search:
             "l2s_data_save_path",
             os.path.join(self.result_folder, "l2seg_training_data.pt"),
         )
+        save_path = os.path.abspath(os.path.expandvars(os.path.expanduser(save_path)))
+
+        test_data_cfg = self.tester_params.get("test_data_load", {})
+        test_data_path = test_data_cfg.get("filename") if test_data_cfg.get("enable", False) else None
+        if test_data_path:
+            test_data_path = os.path.abspath(os.path.expandvars(os.path.expanduser(test_data_path)))
+            same_path = os.path.normcase(os.path.normpath(save_path)) == os.path.normcase(os.path.normpath(test_data_path))
+            if same_path:
+                base, ext = os.path.splitext(save_path)
+                ext = ext if ext else ".pt"
+                redirected_path = f"{base}.generated{ext}"
+                self.logger.warning(
+                    "l2s_data_save_path 与 test_data_load.filename 指向同一路径，"
+                    "为避免覆盖测试数据，训练标签将保存到: %s",
+                    redirected_path,
+                )
+                save_path = redirected_path
+
         save_dir = os.path.dirname(save_path)
         if save_dir:
             os.makedirs(save_dir, exist_ok=True)
