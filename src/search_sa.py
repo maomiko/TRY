@@ -754,6 +754,7 @@ class Search:
                 continue
 
             involved_nodes = sub_label["involved_nodes"]
+            raw_nar_labels = sub_label.get("nar_labels", [])
             if len(involved_nodes) == 0:
                 continue
 
@@ -765,6 +766,15 @@ class Search:
                     customer_nodes.append(x_int)
             if len(customer_nodes) == 0:
                 continue
+
+            # Rebuild NAR labels in local node space: [depot, customer_1..customer_k].
+            # This avoids length mismatch when involved_nodes contains out-of-range IDs.
+            node_to_nar = {
+                int(node_id): int(label)
+                for node_id, label in zip(involved_nodes, raw_nar_labels)
+            }
+            nar_labels_local = [node_to_nar.get(0, 0)] + [node_to_nar.get(x, 0) for x in customer_nodes]
+
             # customer ID is 1..N; feature tensors are 0..N-1.
             idx_tensor = torch.tensor([x - 1 for x in customer_nodes], dtype=torch.long)
 
@@ -788,7 +798,7 @@ class Search:
 
             self.training_data_buffer.append(
                 {
-                    "nar_labels": sub_label["nar_labels"],
+                    "nar_labels": nar_labels_local,
                     "ar_sequences": sub_label["ar_sequence"],
                     "state_dict": local_state_dict,
                 }
