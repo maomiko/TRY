@@ -4,6 +4,7 @@ import os
 import time
 from logging import getLogger
 from typing import Tuple, Dict, Any
+from functools import partial
 
 from torch.nn.utils.rnn import pad_sequence
 
@@ -38,7 +39,7 @@ class DummyResetState:
 # ---------------------------------
 
 
-def l2s_collate_fn(batch):
+def l2s_collate_fn(batch, global_end_token: int, pad_token: int):
     """
     处理变长切片数据：
     1. 将全局节点 ID 映射为局部 ID。
@@ -76,8 +77,8 @@ def l2s_collate_fn(batch):
             if g_id in g2l_map:
                 local_ar_seq.append(g2l_map[g_id])
             else:
-                # END_TOKEN 的位置 = 1 (Depot) + 当前切片的客户总数
-                local_ar_seq.append(-1)
+                # END_TOKEN 统一使用全局固定索引
+                local_ar_seq.append(int(global_end_token))
                     
         ar_seqs_list.append(torch.tensor(local_ar_seq, dtype=torch.long))
         
@@ -97,22 +98,11 @@ def l2s_collate_fn(batch):
     # ==========================================
     # 2. 动态 Padding (补齐长短不一的 Tensor)
     # ==========================================
-    # 找出当前 Batch 里节点最多的一张切片图
+    # 找出当前 Batch 里节点最多的一张切片图（仅用于特征 padding）
     max_nodes = max(len(x) for x in nar_labels_list)
-    # PAD_TOKEN 必须是一个不会和真实节点、也不会和 END_TOKEN 冲突的数字
-    PAD_TOKEN = max_nodes + 2 
-
-
-    # ==========================================
-    # 将真实的 END_TOKEN 索引对齐到模型的末尾 (max_nodes)
-    # ==========================================
-    for i in range(len(ar_seqs_list)):
-        ar_seqs_list[i][ar_seqs_list[i] == -1] = max_nodes
-    
-    ar_sequences_padded = pad_sequence(ar_seqs_list, batch_first=True, padding_value=PAD_TOKEN)
-
-    
-    ar_sequences_padded = pad_sequence(ar_seqs_list, batch_first=True, padding_value=PAD_TOKEN)
+    ar_sequences_padded = pad_sequence(
+        ar_seqs_list, batch_first=True, padding_value=int(pad_token)
+    )
     nar_labels_padded = pad_sequence(nar_labels_list, batch_first=True, padding_value=0.0)
     node_xy_padded = pad_sequence(node_xy_list, batch_first=True, padding_value=0.0)
     node_demand_padded = pad_sequence(node_demand_list, batch_first=True, padding_value=0.0)
@@ -175,7 +165,7 @@ def l2s_collate_fn(batch):
         'nar_labels': nar_labels_padded,
         'ar_sequences': ar_sequences_padded,
         'reset_state': reset_state,
-        'pad_token': PAD_TOKEN  # 传给 Loss 函数，用于忽略 Padding 部分
+        'pad_token': int(pad_token)  # 传给 Loss 函数，用于忽略 Padding 部分
     }
 
 class L2SDataset(Dataset):
@@ -268,12 +258,17 @@ class Trainer:
             )
             
             # 创建训练集 DataLoader
+            collate = partial(
+                l2s_collate_fn,
+                global_end_token=int(self.model.vocab_size - 1),
+                pad_token=int(self.model.PAD_TOKEN),
+            )
             self.train_dataloader = DataLoader(
                 self.train_dataset, 
                 batch_size=self.batch_size, 
                 shuffle=True, 
                 num_workers=4,
-                collate_fn=l2s_collate_fn  
+                collate_fn=collate  
             )
             # 创建验证集 DataLoader (不需要打乱)
             self.val_dataloader = DataLoader(
@@ -281,7 +276,7 @@ class Trainer:
                 batch_size=self.batch_size, 
                 shuffle=False, 
                 num_workers=4,
-                collate_fn=l2s_collate_fn  
+                collate_fn=collate  
             )
             self.logger.info(f"Loaded L2Seg dataset: {train_size} train, {val_size} val.")
         else:
@@ -479,7 +474,8 @@ class Trainer:
             )
 
         # 5. 反向传播与梯度缩放
-        self.scaler.scale(loss).backward()
+        grad_acc_iterations = max(1, int(self.trainer_params.get("grad_acc_iterations", 1)))
+        self.scaler.scale(loss / grad_acc_iterations).backward()
 
         # 6. 计算 NAR 准确率作为评估指标 (代替原本的 RL Reward)
         with torch.no_grad():
@@ -592,11 +588,27 @@ class Trainer:
             ar_logits_flat = ar_logits.reshape(-1, vocab_size)
             ar_targets_flat = ar_targets.reshape(-1)
 
-            # 核心修复：直接使用传入的 pad_token 将目标张量中的填充位替换为 -100
-            ar_targets_flat[ar_targets_flat == pad_token] = -100
+            token_losses = F.cross_entropy(
+                ar_logits_flat,
+                ar_targets_flat,
+                ignore_index=pad_token,
+                reduction="none",
+            ).reshape_as(ar_targets)
 
-            # PyTorch 的 cross_entropy 默认忽略值为 -100 的标签
-            loss_ar = F.cross_entropy(ar_logits_flat, ar_targets_flat, ignore_index=-100)
+            ar_positions = torch.arange(
+                ar_targets.shape[1], device=self.device
+            ).unsqueeze(0)
+            delete_weight = float(self.trainer_params.get("ar_delete_weight", 1.0))
+            insert_weight = float(self.trainer_params.get("ar_insert_weight", 1.0))
+            token_weights = torch.where(
+                (ar_positions % 2) == 0,
+                torch.full_like(token_losses, delete_weight),
+                torch.full_like(token_losses, insert_weight),
+            )
+
+            valid_mask = (ar_targets != pad_token).float()
+            weighted_losses = token_losses * token_weights * valid_mask
+            loss_ar = weighted_losses.sum() / valid_mask.sum().clamp_min(1.0)
             
         # ==========================================
         # 3. 总损失合并
