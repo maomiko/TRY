@@ -52,7 +52,18 @@ def _remap_ar_sequence(
     global_problem_size,
     pad_token,
 ):
-    """Map global AR tokens to local tokens and safely fallback to PAD for unknown tokens."""
+    """
+    Remap AR tokens from global customer IDs to local subproblem IDs.
+
+    Args:
+        raw_ar_sequence: Original AR token sequence from label generation.
+        global_node_indices: Local subproblem customers in global ID space.
+        global_problem_size: Global problem size used to derive global END token.
+        pad_token: PAD token index used by the model.
+
+    Returns:
+        List[int]: Safe local token sequence clamped to [0, pad_token].
+    """
     local_num_customers = len(global_node_indices)
     g2l_map = {int(g_id): local_idx + 1 for local_idx, g_id in enumerate(global_node_indices)}
     g2l_map[0] = 0
@@ -69,7 +80,7 @@ def _remap_ar_sequence(
         else:
             mapped.append(int(pad_token))
 
-    return [max(0, min(int(pad_token), int(t))) for t in mapped]
+    return [max(0, min(int(t), int(pad_token))) for t in mapped]
 
 
 def _read_trainer_params(config):
@@ -194,6 +205,7 @@ def train(config_path, seed=1234):
                 reset_state.neighbours = state_dict["neighbours"].unsqueeze(0).to(device)
                 reset_state.tour_index = reset_state.tour_index.long().clamp(min=-1)
                 local_num_customers = state_dict["node_xy"].shape[0]
+                # Neighbour indices are in node space with depot included: valid range is [0, local_num_customers].
                 reset_state.neighbours = reset_state.neighbours.long().clamp(
                     min=0, max=local_num_customers
                 )

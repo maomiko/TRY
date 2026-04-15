@@ -41,7 +41,7 @@ if __name__ == "__main__":
     os.makedirs(opts.data_dir, exist_ok=True)
 
     def progress_callback(done, total):
-        """Print dataset generation progress where done is completed instances and total is target size."""
+        """Print batch-generation progress at first/interval/final steps based on progress_interval."""
         if opts.progress_interval > 0 and (
             done == 1 or done == total or done % opts.progress_interval == 0
         ):
