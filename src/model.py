@@ -190,7 +190,7 @@ class Model(nn.Module):
         """
         # 1. 直接从 Encoder 输出动态抓取节点特征，避免静态 ID Embedding
         full_embedding_pool = self._build_ar_embedding_pool()
-        safe_sequences = ar_sequences.clamp(min=0, max=self.PAD_TOKEN)
+        safe_sequences = ar_sequences.clamp(min=0, max=full_embedding_pool.size(1) - 1)
         gather_idx = safe_sequences.unsqueeze(-1).expand(
             -1, -1, self.model_params["embedding_dim"]
         )
@@ -248,10 +248,13 @@ class Model(nn.Module):
         solution_neighbours = reset_state.neighbours.to(device)
 
         # 3. AR 自回归生成循环：严格交替的 删除(Delete) 与 插入(Insert) 阶段
+        full_embedding_pool = self._build_ar_embedding_pool()
+        max_token_idx = full_embedding_pool.size(1) - 1
+
         for step in range(max_steps - 1):
             current_nodes = current_nodes.clamp(min=0, max=self.PAD_TOKEN)
             # 将当前节点从动态特征池中取 Embedding
-            full_embedding_pool = self._build_ar_embedding_pool()
+            current_nodes = current_nodes.clamp(min=0, max=max_token_idx)
             gather_idx = current_nodes.unsqueeze(-1).unsqueeze(-1).expand(
                 -1, 1, self.model_params["embedding_dim"]
             )
