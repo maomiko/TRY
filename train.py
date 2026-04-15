@@ -46,6 +46,43 @@ def custom_collate(batch):
     return batch
 
 
+def _remap_ar_sequence(
+    raw_ar_sequence,
+    global_node_indices,
+    global_problem_size,
+    pad_token,
+):
+    """
+    Remap AR tokens from global customer IDs to local subproblem IDs.
+
+    Args:
+        raw_ar_sequence: Original AR token sequence from label generation.
+        global_node_indices: Local subproblem customers in global ID space.
+        global_problem_size: Global problem size used to derive global END token.
+        pad_token: PAD token index used by the model.
+
+    Returns:
+        List[int]: Safe local token sequence clamped to [0, pad_token].
+    """
+    local_num_customers = len(global_node_indices)
+    g2l_map = {int(g_id): local_idx + 1 for local_idx, g_id in enumerate(global_node_indices)}
+    g2l_map[0] = 0
+    global_end_token = int(global_problem_size) + 1
+    local_end_token = local_num_customers + 1
+
+    mapped = []
+    for token in raw_ar_sequence:
+        token = int(token)
+        if token in g2l_map:
+            mapped.append(g2l_map[token])
+        elif token == global_end_token:
+            mapped.append(local_end_token)
+        else:
+            mapped.append(int(pad_token))
+
+    return [max(0, min(int(t), int(pad_token))) for t in mapped]
+
+
 def _read_trainer_params(config):
     trainer_params = config.get("trainer_params", {})
     nar_pos_weight = trainer_params.get("nar_pos_weight", None)
@@ -144,7 +181,17 @@ def train(config_path, seed=1234):
                 
                 # 搬运基础标签
                 nar_labels = torch.tensor(sample["nar_labels"], dtype=torch.float32, device=device).unsqueeze(0) 
-                ar_sequences = torch.tensor(sample["ar_sequences"], dtype=torch.long, device=device).unsqueeze(0)
+                raw_ar_sequence = sample["ar_sequences"]
+                global_node_indices = state_dict.get("global_node_indices", [])
+                mapped_ar_sequence = _remap_ar_sequence(
+                    raw_ar_sequence,
+                    global_node_indices,
+                    model.problem_size,
+                    model.PAD_TOKEN,
+                )
+                ar_sequences = torch.tensor(
+                    mapped_ar_sequence, dtype=torch.long, device=device
+                ).unsqueeze(0)
 
                 # --- 组装 Mock 环境对象 ---
                 mock_feat = MockProblemFeat()
@@ -156,6 +203,12 @@ def train(config_path, seed=1234):
                 reset_state.problem_feat = mock_feat
                 reset_state.tour_index = state_dict["tour_index"].unsqueeze(0).to(device)
                 reset_state.neighbours = state_dict["neighbours"].unsqueeze(0).to(device)
+                reset_state.tour_index = reset_state.tour_index.long().clamp(min=-1)
+                local_num_customers = state_dict["node_xy"].shape[0]
+                # Neighbour indices are in node space with depot included: valid range is [0, local_num_customers].
+                reset_state.neighbours = reset_state.neighbours.long().clamp(
+                    min=0, max=local_num_customers
+                )
                 
                 # 补全 25 维模型所需的 22 维附加特征 (8静态+14动态)
                 N = state_dict["node_xy"].shape[0]

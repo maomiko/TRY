@@ -262,13 +262,15 @@ class InstanceGenCVRP:
         node_capacity = torch.full((batch_size, 1), UNIFORM_CAPACITY[self.problem_size])
         return depot_xy, node_xy, node_demand, node_capacity
 
-    def get_random_problems(self, batch_size, seed=None):
+    def get_random_problems(self, batch_size, seed=None, progress_callback=None):
         """
         Generate a batch of CVRP instances, either using the uniform generator or the X-generator.
 
         Args:
             batch_size: Number of instances to generate
             seed: Optional random seed for reproducibility
+            progress_callback (callable, optional): Callback with signature
+                progress_callback(done: int, total: int) for progress reporting.
 
         Returns:
             depot_xy: (batch_size, 1, 2) tensor of depot coordinates
@@ -302,6 +304,8 @@ class InstanceGenCVRP:
             node_xy_np[i] = coords[1:]
             demand_np[i] = inst[1][1:]
             capacity_list.append(inst[2])
+            if progress_callback is not None:
+                progress_callback(i + 1, batch_size)
 
         depot_xy = torch.tensor(depot_xy_np, dtype=torch.float32) / 1000.0
         node_xy = torch.tensor(node_xy_np, dtype=torch.float32) / 1000.0

@@ -12,6 +12,12 @@ if __name__ == "__main__":
     parser.add_argument("--dataset_size", type=int, default=100, help="Size of the dataset")
     parser.add_argument('--n', type=int, default=100, help="Sizes of problem instances")
     parser.add_argument('--seed', type=int, default=0, help="Random seed")
+    parser.add_argument(
+        "--progress_interval",
+        type=int,
+        default=100,
+        help="Print generation progress every N instances (<=0 disables intermediate progress)",
+    )
 
     # CVRP
     parser.add_argument('--depot_pos', type=int, default=2)
@@ -34,6 +40,13 @@ if __name__ == "__main__":
 
     os.makedirs(opts.data_dir, exist_ok=True)
 
+    def progress_callback(done, total):
+        """Print batch-generation progress at first/interval/final steps based on progress_interval."""
+        if opts.progress_interval > 0 and (
+            done == 1 or done == total or done % opts.progress_interval == 0
+        ):
+            print(f"Generating {opts.problem} dataset: {done}/{total}")
+
     if opts.problem == 'cvrp':
         filename = os.path.join(opts.data_dir, "cvrp{}_{}_seed{}_{}_{}_{}_{}.pt".format(opts.n, opts.name,
                                                                                          opts.seed, opts.depot_pos,
@@ -43,7 +56,9 @@ if __name__ == "__main__":
         instanceGen = InstanceGenCVRP(opts.n, True, opts.depot_pos, opts.cus_pos, opts.demand_dis,
                                       opts.avg_route_size)
 
-        depot_xy, node_xy, node_demand, capacity = instanceGen.get_random_problems(opts.dataset_size, opts.seed)
+        depot_xy, node_xy, node_demand, capacity = instanceGen.get_random_problems(
+            opts.dataset_size, opts.seed, progress_callback=progress_callback
+        )
 
 
         torch.save({
@@ -71,7 +86,9 @@ if __name__ == "__main__":
                                        opts.avg_route_size, opts.service_window, opts.time_window_size,
                                         opts.service_duration)
 
-        depot_xy, node_xy, node_demand, capacity, depot_tw, node_tw, node_sd = instanceGen.get_random_problems(opts.dataset_size, opts.seed)
+        depot_xy, node_xy, node_demand, capacity, depot_tw, node_tw, node_sd = instanceGen.get_random_problems(
+            opts.dataset_size, opts.seed, progress_callback=progress_callback
+        )
 
         torch.save({
             'depot_xy': depot_xy,
@@ -100,7 +117,9 @@ if __name__ == "__main__":
         instanceGen = InstanceGenPCVRP(opts.n, True, opts.depot_pos, opts.cus_pos, opts.demand_dis,
                                        opts.avg_route_size, opts.prize_min, opts.prize_max, opts.prize_alpha)
 
-        depot_xy, node_xy, node_demand, capacity, node_prize = instanceGen.get_random_problems(opts.dataset_size, opts.seed)
+        depot_xy, node_xy, node_demand, capacity, node_prize = instanceGen.get_random_problems(
+            opts.dataset_size, opts.seed, progress_callback=progress_callback
+        )
 
         torch.save({
             'depot_xy': depot_xy,
@@ -115,5 +134,3 @@ if __name__ == "__main__":
 
     else:
         raise ValueError(f"Problem {opts.problem} not supported")
-
-
