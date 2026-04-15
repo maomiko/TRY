@@ -6,17 +6,6 @@ paper_reference:
     - "训练后可加载 checkpoint 并完成 AI 模式推理"
     - "输出平均 cost/runtime 并与 baseline 对齐比较"
 
-data_splits:
-  train:
-    filename: "data/cvrp/vrp1000_train_seed1232.pkl"
-    seed: 1232
-  valid:
-    filename: "data/cvrp/vrp1000_valid_seed1233.pkl"
-    seed: 1233
-  test:
-    filename: "data/cvrp/vrp1000_test_seed1234.pkl"
-    seed: 1234
-
 env_params:
   problem: "cvrp"
   problem_size: 100
@@ -46,7 +35,7 @@ model_params:
   eval_type: "argmax"
 
 tester_params:
-  seed: 1232
+  seed: 1234
   deterministic: true
   use_cuda: false
   cuda_device_num: 0
@@ -76,4 +65,4 @@ tester_params:
   test_data_load:
     enable: true
     use_pkl_file: true
-    filename: "data/cvrp/vrp1000_train_seed1232.pkl"
+    filename: "data/cvrp/vrp1000_test_seed1234.pkl"

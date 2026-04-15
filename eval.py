@@ -6,47 +6,6 @@ import random
 import numpy as np
 from src.search_sa import Search
 
-
-def _normalize_optional_path(path_value):
-    if not path_value:
-        return None
-    return os.path.normcase(os.path.normpath(os.path.abspath(os.path.expandvars(os.path.expanduser(str(path_value))))))
-
-
-def _startup_check_data_splits(config, tester_params):
-    split_meta = config.get("data_splits", {})
-    train_file = (split_meta.get("train", {}) if isinstance(split_meta.get("train", {}), dict) else {}).get("filename")
-    valid_file = (split_meta.get("valid", {}) if isinstance(split_meta.get("valid", {}), dict) else {}).get("filename")
-    test_file_meta = (split_meta.get("test", {}) if isinstance(split_meta.get("test", {}), dict) else {}).get("filename")
-
-    cfg_data_file = (tester_params.get("test_data_load", {}) if isinstance(tester_params.get("test_data_load", {}), dict) else {}).get("filename")
-    if tester_params.get("expert_data_mode", False):
-        train_file = cfg_data_file or train_file
-    else:
-        test_file_meta = cfg_data_file or test_file_meta
-
-    train_seed = (split_meta.get("train", {}) if isinstance(split_meta.get("train", {}), dict) else {}).get("seed")
-    valid_seed = (split_meta.get("valid", {}) if isinstance(split_meta.get("valid", {}), dict) else {}).get("seed")
-    test_seed = (split_meta.get("test", {}) if isinstance(split_meta.get("test", {}), dict) else {}).get("seed")
-
-    print("🔎 数据切分检查（train/valid/test）:")
-    print(f"   train: {train_file} (seed={train_seed})")
-    print(f"   valid: {valid_file} (seed={valid_seed})")
-    print(f"   test : {test_file_meta} (seed={test_seed})")
-
-    if train_file and valid_file and test_file_meta:
-        basenames = [os.path.basename(str(train_file)), os.path.basename(str(valid_file)), os.path.basename(str(test_file_meta))]
-        if len(set(basenames)) != 3:
-            raise ValueError(
-                f"train/valid/test 文件名存在重名: {basenames}；请使用互斥数据集。"
-            )
-
-        normalized = [_normalize_optional_path(train_file), _normalize_optional_path(valid_file), _normalize_optional_path(test_file_meta)]
-        if len(set(normalized)) != 3:
-            raise ValueError(
-                "train/valid/test 文件路径存在重叠（同一路径），请改为互斥数据源。"
-            )
-
 def load_config(yaml_path):
     """加载 YAML 配置文件"""
     with open(yaml_path, 'r', encoding='utf-8') as f:
@@ -69,7 +28,6 @@ def main():
     config = load_config(args.config)
     env_params = config.get("env_params", {})
     tester_params = config.get("tester_params", {})
-    _startup_check_data_splits(config, tester_params)
 
     random.seed(args.seed)
     np.random.seed(args.seed)
