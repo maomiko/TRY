@@ -252,7 +252,6 @@ class Model(nn.Module):
         max_token_idx = full_embedding_pool.size(1) - 1
 
         for step in range(max_steps - 1):
-            current_nodes = current_nodes.clamp(min=0, max=self.PAD_TOKEN)
             # 将当前节点从动态特征池中取 Embedding
             current_nodes = current_nodes.clamp(min=0, max=max_token_idx)
             gather_idx = current_nodes.unsqueeze(-1).unsqueeze(-1).expand(
