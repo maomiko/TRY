@@ -83,6 +83,36 @@ def _remap_ar_sequence(
     return [max(0, min(int(t), int(pad_token))) for t in mapped]
 
 
+def _remap_nar_labels(
+    raw_nar_labels,
+    global_node_indices,
+    global_problem_size,
+):
+    """
+    Normalize NAR labels into local subproblem node space: [depot, customers...].
+    """
+    safe_raw = [float(x) for x in raw_nar_labels]
+    safe_global_nodes = [
+        int(x) for x in global_node_indices if 0 < int(x) <= int(global_problem_size)
+    ]
+    expected_local_len = len(safe_global_nodes) + 1
+
+    if len(safe_raw) == expected_local_len:
+        return safe_raw, "local_aligned"
+    if len(safe_raw) == len(safe_global_nodes):
+        return [0.0] + safe_raw, "local_missing_depot"
+
+    global_with_depot_len = int(global_problem_size) + 1
+    # 兼容旧数据：标签仍在全局空间（长度通常为 problem_size+1 或更长）
+    if len(safe_raw) >= global_with_depot_len:
+        remapped = [safe_raw[0]]
+        for node_id in safe_global_nodes:
+            remapped.append(safe_raw[node_id] if node_id < len(safe_raw) else 0.0)
+        return remapped, "global_to_local"
+
+    return safe_raw, "unknown"
+
+
 def _read_trainer_params(config):
     trainer_params = config.get("trainer_params", {})
     nar_pos_weight = trainer_params.get("nar_pos_weight", None)
@@ -170,6 +200,8 @@ def train(config_path, seed=1234):
         skipped_short_sequences = 0
         padded_nar_labels = 0
         truncated_nar_labels = 0
+        remapped_global_nar_labels = 0
+        fixed_missing_depot_labels = 0
         
         for batch_idx, batch in enumerate(dataloader):
             optimizer.zero_grad()
@@ -180,9 +212,20 @@ def train(config_path, seed=1234):
                 state_dict = sample["state_dict"]
                 
                 # 搬运基础标签
-                nar_labels = torch.tensor(sample["nar_labels"], dtype=torch.float32, device=device).unsqueeze(0) 
-                raw_ar_sequence = sample["ar_sequences"]
                 global_node_indices = state_dict.get("global_node_indices", [])
+                normalized_nar_labels, nar_label_status = _remap_nar_labels(
+                    sample.get("nar_labels", []),
+                    global_node_indices,
+                    model.problem_size,
+                )
+                if nar_label_status == "global_to_local":
+                    remapped_global_nar_labels += 1
+                elif nar_label_status == "local_missing_depot":
+                    fixed_missing_depot_labels += 1
+                nar_labels = torch.tensor(
+                    normalized_nar_labels, dtype=torch.float32, device=device
+                ).unsqueeze(0)
+                raw_ar_sequence = sample["ar_sequences"]
                 mapped_ar_sequence = _remap_ar_sequence(
                     raw_ar_sequence,
                     global_node_indices,
@@ -290,6 +333,10 @@ def train(config_path, seed=1234):
             print(f"  ⚠️ 补齐 {padded_nar_labels} 条 NAR 标签（标签长度 < logits 长度）")
         if truncated_nar_labels > 0:
             print(f"  ⚠️ 截断 {truncated_nar_labels} 条 NAR 标签（标签长度 > logits 长度）")
+        if remapped_global_nar_labels > 0:
+            print(f"  ℹ️ 已重映射 {remapped_global_nar_labels} 条全局 NAR 标签到局部空间")
+        if fixed_missing_depot_labels > 0:
+            print(f"  ℹ️ 已修复 {fixed_missing_depot_labels} 条缺失 Depot 的 NAR 标签")
 
         with open(trainer_params["metrics_csv"], "a", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
