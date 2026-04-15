@@ -834,7 +834,7 @@ class CVRP_Decoder(nn.Module):
         self.GRU_hidden = None
         self.pad_mask = pad_mask # 【新增】保存掩码供打分时使用
         
-        # 原始 single_head_key: (batch, dim, local_nodes_with_depot)
+        # 原始节点 Key（后续会对齐到固定全局槽位）: (batch, dim, local_nodes_with_depot)
         base_key = encoded_nodes.transpose(1, 2)
         batch_size = encoded_nodes.size(0)
 

@@ -595,6 +595,7 @@ class Trainer:
                 reduction="none",
             ).reshape_as(ar_targets)
 
+            # 约定 AR 监督序列按 delete/insert 位置交替排列（与 train.py 保持一致）
             ar_positions = torch.arange(
                 ar_targets.shape[1], device=self.device
             ).unsqueeze(0)
