@@ -2,6 +2,7 @@
 
 import os
 import time
+import warnings
 from logging import getLogger
 from typing import Tuple, Dict, Any
 from functools import partial
@@ -61,23 +62,27 @@ def l2s_collate_fn(batch, global_end_token: int, pad_token: int):
     has_prizes = 'node_prizes' in batch[0]['state_dict']
 
 
+    unknown_ar_tokens = set()
+
     for item in batch:
         global_indices = item['state_dict']['global_node_indices']
-        local_num_customers = len(global_indices)
-          
 
-        
         # 在前向传播时，Depot 永远会被 concat 在最前面（索引 0）
         # 所以客户的局部索引必须从 1 开始顺延
         g2l_map = {g_id: l_idx + 1 for l_idx, g_id in enumerate(global_indices)}
         g2l_map[0] = 0  # 手动补上 Depot 的映射
             
         local_ar_seq = []
-        for g_id in item['ar_sequences']:
+        for raw_g_id in item['ar_sequences']:
+            g_id = int(raw_g_id)
             if g_id in g2l_map:
                 local_ar_seq.append(g2l_map[g_id])
+            elif g_id == int(global_end_token):
+                # 合法结束符，保留全局固定索引
+                local_ar_seq.append(int(global_end_token))
             else:
-                # END_TOKEN 统一使用全局固定索引
+                # 异常 token 回退为 END，同时显式告警，避免静默吞错
+                unknown_ar_tokens.add(g_id)
                 local_ar_seq.append(int(global_end_token))
                     
         ar_seqs_list.append(torch.tensor(local_ar_seq, dtype=torch.long))
@@ -95,6 +100,17 @@ def l2s_collate_fn(batch, global_end_token: int, pad_token: int):
         if has_prizes:
             node_prizes_list.append(item['state_dict']['node_prizes'])
     
+    if unknown_ar_tokens:
+        preview = sorted(unknown_ar_tokens)[:8]
+        warnings.warn(
+            (
+                "Unknown AR token IDs detected in batch and remapped to END token. "
+                f"count={len(unknown_ar_tokens)}, preview={preview}, end_token={int(global_end_token)}"
+            ),
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
     # ==========================================
     # 2. 动态 Padding (补齐长短不一的 Tensor)
     # ==========================================

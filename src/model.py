@@ -1,6 +1,7 @@
 """Neural network model to learn selecting nodes to remove from VRP solutions."""
 
 from typing import Tuple, Optional
+import warnings
 
 import torch
 import torch.nn as nn
@@ -224,8 +225,10 @@ class Model(nn.Module):
         # 👑 核心修改：强行空投到“重灾区”起点
         # ==========================================
         # 不再瞎猜起点，而是直接使用传入的 starting_node 构建 batch 的初始输入
-        start_nodes = torch.full((batch_size,), starting_node, dtype=torch.long, device=device)
-        start_nodes = start_nodes.clamp(min=0, max=self.PAD_TOKEN)
+        safe_starting_node = self._sanitize_starting_node(starting_node)
+        start_nodes = torch.full(
+            (batch_size,), safe_starting_node, dtype=torch.long, device=device
+        )
         
         generated_sequences = [start_nodes.unsqueeze(1)]
         current_nodes = start_nodes
@@ -369,6 +372,26 @@ class Model(nn.Module):
         # 拼接所有生成的节点 (包含了 starting_node 直到 END_TOKEN)
         final_sequences = torch.cat(generated_sequences, dim=1)
         return final_sequences
+
+    def _sanitize_starting_node(self, starting_node: int) -> int:
+        """Clamp invalid starting node index with explicit warning."""
+        try:
+            start_idx = int(starting_node)
+        except (TypeError, ValueError) as exc:
+            raise TypeError(
+                f"starting_node must be int-convertible, got {type(starting_node)!r}"
+            ) from exc
+
+        if start_idx < 0 or start_idx > self.PAD_TOKEN:
+            warnings.warn(
+                (
+                    f"starting_node={start_idx} is out of valid range [0, {self.PAD_TOKEN}]. "
+                    "It will be clamped."
+                ),
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        return max(0, min(start_idx, self.PAD_TOKEN))
 
     def _sample_from_probs(
         self, probs: torch.Tensor, state, batch_size: int, rollout_size: int
