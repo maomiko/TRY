@@ -132,10 +132,59 @@ def _read_trainer_params(config):
         "ar_insert_weight": float(trainer_params.get("ar_insert_weight", 1.0)),
         "ar_delete_weight": float(trainer_params.get("ar_delete_weight", 1.0)),
         "train_data_path": trainer_params.get("train_data_path", "results/l2seg_dataset/l2seg_training_data.pt"),
+        "valid_data_path": trainer_params.get("valid_data_path", None),
+        "train_dataset_filename": trainer_params.get("train_dataset_filename", None),
+        "test_data_path": trainer_params.get("test_data_path", None),
         "checkpoint_dir": trainer_params.get("checkpoint_dir", "results/l2seg_dataset/checkpoints"),
         "checkpoint_every": int(trainer_params.get("checkpoint_every", 1)),
         "metrics_csv": trainer_params.get("metrics_csv", "results/l2seg_dataset/train_metrics.csv"),
     }
+
+
+def _normalize_optional_path(path_value):
+    if not path_value:
+        return None
+    return os.path.normcase(os.path.normpath(os.path.abspath(os.path.expandvars(os.path.expanduser(str(path_value))))))
+
+
+def _startup_check_data_splits(config, trainer_params):
+    split_meta = config.get("data_splits", {})
+
+    train_file = (
+        trainer_params.get("train_dataset_filename")
+        or (split_meta.get("train", {}) if isinstance(split_meta.get("train", {}), dict) else {}).get("filename")
+        or trainer_params.get("train_data_path")
+    )
+    valid_file = (
+        trainer_params.get("valid_data_path")
+        or (split_meta.get("valid", {}) if isinstance(split_meta.get("valid", {}), dict) else {}).get("filename")
+    )
+    test_file = (
+        trainer_params.get("test_data_path")
+        or (split_meta.get("test", {}) if isinstance(split_meta.get("test", {}), dict) else {}).get("filename")
+    )
+
+    train_seed = (split_meta.get("train", {}) if isinstance(split_meta.get("train", {}), dict) else {}).get("seed")
+    valid_seed = (split_meta.get("valid", {}) if isinstance(split_meta.get("valid", {}), dict) else {}).get("seed")
+    test_seed = (split_meta.get("test", {}) if isinstance(split_meta.get("test", {}), dict) else {}).get("seed")
+
+    print("🔎 数据切分检查（train/valid/test）:")
+    print(f"   train: {train_file} (seed={train_seed})")
+    print(f"   valid: {valid_file} (seed={valid_seed})")
+    print(f"   test : {test_file} (seed={test_seed})")
+
+    if train_file and valid_file and test_file:
+        basenames = [os.path.basename(str(train_file)), os.path.basename(str(valid_file)), os.path.basename(str(test_file))]
+        if len(set(basenames)) != 3:
+            raise ValueError(
+                f"train/valid/test 文件名存在重名: {basenames}；请使用互斥数据集。"
+            )
+
+        normalized = [_normalize_optional_path(train_file), _normalize_optional_path(valid_file), _normalize_optional_path(test_file)]
+        if len(set(normalized)) != 3:
+            raise ValueError(
+                "train/valid/test 文件路径存在重叠（同一路径），请改为互斥数据源。"
+            )
 
 # ==========================================
 # 3. 主训练逻辑
@@ -157,6 +206,7 @@ def train(config_path, seed=1234):
     model_params = config["model_params"]
     env_params = config["env_params"]
     trainer_params = _read_trainer_params(config)
+    _startup_check_data_splits(config, trainer_params)
     
     # 自动计算或校对 sqrt_embedding_dim
     if "sqrt_embedding_dim" not in model_params:

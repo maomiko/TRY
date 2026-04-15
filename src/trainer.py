@@ -261,40 +261,59 @@ class Trainer:
                 trainer_params,
             )
         l2s_data_path = self.trainer_params.get("l2s_data_path", "results/l2seg_dataset/l2seg_training_data.pt")
+        valid_data_path = self.trainer_params.get("valid_data_path", None)
         if os.path.exists(l2s_data_path):
             full_dataset = L2SDataset(l2s_data_path)
-            
-            # 【新增】：按 9:1 随机切分训练集和验证集
-            dataset_size = len(full_dataset)
-            val_size = int(0.1 * dataset_size)
-            train_size = dataset_size - val_size
-            
-            self.train_dataset, self.val_dataset = torch.utils.data.random_split(
-                full_dataset, [train_size, val_size]
-            )
-            
-            # 创建训练集 DataLoader
+
+            # 创建训练集/验证集：优先使用独立验证集；否则回退到可复现 9:1 切分
             collate = partial(
                 l2s_collate_fn,
                 global_end_token=int(self.model.vocab_size - 1),
                 pad_token=int(self.model.PAD_TOKEN),
             )
+
+            if valid_data_path and os.path.exists(valid_data_path):
+                self.train_dataset = full_dataset
+                self.val_dataset = L2SDataset(valid_data_path)
+                self.logger.info(
+                    "Loaded L2Seg dataset with isolated validation source: train=%d (%s), val=%d (%s).",
+                    len(self.train_dataset),
+                    l2s_data_path,
+                    len(self.val_dataset),
+                    valid_data_path,
+                )
+            else:
+                dataset_size = len(full_dataset)
+                val_size = int(0.1 * dataset_size)
+                if dataset_size > 1 and val_size == 0:
+                    val_size = 1
+                train_size = dataset_size - val_size
+                split_seed = int(self.trainer_params.get("seed", 1234))
+                split_gen = torch.Generator().manual_seed(split_seed)
+                self.train_dataset, self.val_dataset = torch.utils.data.random_split(
+                    full_dataset, [train_size, val_size], generator=split_gen
+                )
+                self.logger.warning(
+                    "valid_data_path not provided/found; fallback to seeded random split (seed=%d): %d train, %d val.",
+                    split_seed,
+                    train_size,
+                    val_size,
+                )
+
             self.train_dataloader = DataLoader(
-                self.train_dataset, 
-                batch_size=self.batch_size, 
-                shuffle=True, 
+                self.train_dataset,
+                batch_size=self.batch_size,
+                shuffle=True,
                 num_workers=4,
-                collate_fn=collate  
+                collate_fn=collate
             )
-            # 创建验证集 DataLoader (不需要打乱)
             self.val_dataloader = DataLoader(
-                self.val_dataset, 
-                batch_size=self.batch_size, 
-                shuffle=False, 
+                self.val_dataset,
+                batch_size=self.batch_size,
+                shuffle=False,
                 num_workers=4,
-                collate_fn=collate  
+                collate_fn=collate
             )
-            self.logger.info(f"Loaded L2Seg dataset: {train_size} train, {val_size} val.")
         else:
             self.logger.warning(f"L2Seg data not found at {l2s_data_path}. Please generate data first.")
             self.train_dataloader = []
