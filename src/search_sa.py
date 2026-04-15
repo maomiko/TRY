@@ -626,7 +626,7 @@ class Search:
             lkh_path=lkh_path,
             timeout_sec=lkh_timeout_sec,
             max_vehicles=self.env_params.get("max_vehicles", 50),
-            lkh_trace=bool(self.tester_params.get("lkh_trace", False)),
+            lkh_trace=bool(self.tester_params.get("lkh_trace", True)),
         )
 
         # ==========================================
