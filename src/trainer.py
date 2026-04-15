@@ -602,8 +602,8 @@ class Trainer:
             insert_weight = float(self.trainer_params.get("ar_insert_weight", 1.0))
             token_weights = torch.where(
                 (ar_positions % 2) == 0,
-                torch.full_like(token_losses, delete_weight),
-                torch.full_like(token_losses, insert_weight),
+                delete_weight,
+                insert_weight,
             )
 
             valid_mask = (ar_targets != pad_token).float()

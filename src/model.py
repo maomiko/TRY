@@ -49,7 +49,9 @@ class Model(nn.Module):
         [Depot(0), Customers(1..problem_size), END(problem_size+1), PAD(problem_size+2)].
         """
         if self.encoded_nodes is None:
-            raise RuntimeError("encoded_nodes is None, call pre_forward first.")
+            raise RuntimeError(
+                "encoded_nodes is None. Ensure Model.pre_forward() is called before AR decoding."
+            )
 
         batch_size = self.encoded_nodes.size(0)
         embedding_dim = self.model_params["embedding_dim"]
@@ -61,8 +63,8 @@ class Model(nn.Module):
         )
 
         # 复制可用节点特征到 [Depot + Customers] 槽位
-        max_node_slots = self.vocab_size - 1  # 0..problem_size
-        copy_len = min(self.encoded_nodes.size(1), max_node_slots)
+        available_node_slots = self.vocab_size - 1  # 0..problem_size
+        copy_len = min(self.encoded_nodes.size(1), available_node_slots)
         pool[:, :copy_len, :] = self.encoded_nodes[:, :copy_len, :]
 
         # 写入 END_TOKEN 的可学习向量表示
@@ -849,7 +851,10 @@ class CVRP_Decoder(nn.Module):
             )
             base_key = torch.cat([base_key, key_pad], dim=2)
         elif base_key.size(2) > fixed_node_slots:
-            base_key = base_key[:, :, :fixed_node_slots]
+            raise ValueError(
+                f"encoded node slots ({base_key.size(2)}) exceed configured problem size "
+                f"({fixed_node_slots - 1})."
+            )
 
         # 将 END_TOKEN 扩展到当前 batch size，并拼接到节点后面
         # 拼接后形状: (batch, dim, problem_size + 2)
@@ -953,10 +958,10 @@ class CVRP_Decoder(nn.Module):
                 node_mask[:, 0] = False  # Depot 永远可用
 
                 # pad_mask 是客户维度（不含 Depot），长度等于当前 batch 的客户 padded 长度
-                local_customer_slots = max(0, min(self.pad_mask.size(1), node_slots - 1))
-                if local_customer_slots > 0:
-                    node_mask[:, 1 : 1 + local_customer_slots] = self.pad_mask[
-                        :, :local_customer_slots
+                customer_mask_len = max(0, min(self.pad_mask.size(1), node_slots - 1))
+                if customer_mask_len > 0:
+                    node_mask[:, 1 : 1 + customer_mask_len] = self.pad_mask[
+                        :, :customer_mask_len
                     ]
 
                 # END_TOKEN 允许作为合法结束
