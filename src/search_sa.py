@@ -408,6 +408,24 @@ class Search:
             "l2s_data_save_path",
             os.path.join(self.result_folder, "l2seg_training_data.pt"),
         )
+        save_path = os.path.abspath(os.path.expandvars(os.path.expanduser(save_path)))
+
+        test_data_cfg = self.tester_params.get("test_data_load", {})
+        test_data_path = test_data_cfg.get("filename") if test_data_cfg.get("enable", False) else None
+        if test_data_path:
+            test_data_path = os.path.abspath(os.path.expandvars(os.path.expanduser(test_data_path)))
+            same_path = os.path.normcase(os.path.normpath(save_path)) == os.path.normcase(os.path.normpath(test_data_path))
+            if same_path:
+                base, ext = os.path.splitext(save_path)
+                ext = ext if ext else ".pt"
+                redirected_path = f"{base}.generated{ext}"
+                self.logger.warning(
+                    "l2s_data_save_path 与 test_data_load.filename 指向同一路径，"
+                    "为避免覆盖测试数据，训练标签将保存到: %s",
+                    redirected_path,
+                )
+                save_path = redirected_path
+
         save_dir = os.path.dirname(save_path)
         if save_dir:
             os.makedirs(save_dir, exist_ok=True)
@@ -813,39 +831,20 @@ class Search:
         # 👑 动态构建纯 Python 状态 (Tour Index & Neighbours)
         # =======================================================
         raw_tours = self.my_python_solutions[0].getTourList()
-        
-        # 👑 1. 终极降维清洗：不管 raw_tours 被套娃了多少层，统统拍平！
-        def flatten(lst):
-            result = []
-            for item in lst:
-                if isinstance(item, list):
-                    result.extend(flatten(item))
-                else:
-                    result.append(item)
-            return result
-            
-        flat_tour = flatten(raw_tours)
-        
         num_customers = len(self.full_node_xy) - 1
-        
-        # 👑 2. 洗牌重组：剔除 0 和 LKH 产生的假车场，还原出完美的 2D 路线！
-        clean_tours = []
-        current_route = []
-        for node in flat_tour:
-            if node == 0 or node > num_customers:
-                # 遇到车场，切割出一条独立的车队路线
-                if len(current_route) > 0:
-                    clean_tours.append(current_route)
-                    current_route = []
-            else:
-                current_route.append(node)
-        if len(current_route) > 0:
-            clean_tours.append(current_route)
-            
-        # 将绝对纯净的 List[List[int]] 赋值回去
-        tours = clean_tours
-        
-        # 👑 3. 提取特征 (这下绝对不会再有 list - 1 的报错了)
+
+        # 直接使用二维路线结构，避免拍平导致多车路线被错误合并。
+        tours = [
+            [
+                int(node)
+                for node in tour
+                if 0 < int(node) <= num_customers
+            ]
+            for tour in raw_tours
+            if tour
+        ]
+
+        # 👑 3. 提取特征
         tour_idx_array = np.zeros(num_customers, dtype=np.int64)
         neighbours_array = np.zeros((num_customers, 2), dtype=np.int64)
 

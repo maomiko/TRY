@@ -1,6 +1,7 @@
 """Neural network model to learn selecting nodes to remove from VRP solutions."""
 
 from typing import Tuple, Optional
+import warnings
 
 import torch
 import torch.nn as nn
@@ -43,13 +44,37 @@ class Model(nn.Module):
         # 定义专属的 PAD_TOKEN，它的索引是 problem_size + 2
         self.PAD_TOKEN = self.problem_size + 2
         
-        # AR嵌入层: 容量需要额外 +1 来容纳 PAD_TOKEN，所以是 vocab_size + 1
-        # 指定 padding_idx 后，模型遇到 PAD_TOKEN 时会自动输出全 0 向量，不参与梯度更新
-        self.ar_embedding = nn.Embedding(
-            self.vocab_size + 1, 
-            embedding_dim, 
-            padding_idx=self.PAD_TOKEN
+    def _build_ar_embedding_pool(self) -> torch.Tensor:
+        """
+        Build a fixed AR token embedding pool:
+        [Depot(0), Customers(1..problem_size), END(problem_size+1), PAD(problem_size+2)].
+        """
+        if self.encoded_nodes is None:
+            raise RuntimeError(
+                "encoded_nodes is None. Ensure Model.pre_forward() is called before AR decoding."
+            )
+
+        batch_size = self.encoded_nodes.size(0)
+        embedding_dim = self.model_params["embedding_dim"]
+        device = self.encoded_nodes.device
+
+        # 固定池大小，保证 token 索引在全流程中稳定
+        pool = torch.zeros(
+            batch_size, self.PAD_TOKEN + 1, embedding_dim, device=device
         )
+
+        # 复制可用节点特征到 [Depot + Customers] 槽位
+        available_node_slots = self.vocab_size - 1  # 0..problem_size
+        copy_len = min(self.encoded_nodes.size(1), available_node_slots)
+        pool[:, :copy_len, :] = self.encoded_nodes[:, :copy_len, :]
+
+        # 写入 END_TOKEN 的可学习向量表示
+        end_token_emb = self.decoder.end_token_key.transpose(1, 2).expand(
+            batch_size, 1, -1
+        )
+        pool[:, self.vocab_size - 1 : self.vocab_size, :] = end_token_emb
+        # PAD_TOKEN 保持全零向量（不参与语义）
+        return pool
 
     def pre_forward(self, reset_state, z: torch.Tensor = None) -> None:
         """
@@ -164,8 +189,13 @@ class Model(nn.Module):
         Returns:
             shape: (batch_size, seq_len, vocab_size)
         """
-        # 1. 将离散的序列 ID 转化为稠密的 Embedding
-        seq_embeddings = self.ar_embedding(ar_sequences)
+        # 1. 直接从 Encoder 输出动态抓取节点特征，避免静态 ID Embedding
+        full_embedding_pool = self._build_ar_embedding_pool()
+        safe_sequences = ar_sequences.clamp(min=0, max=full_embedding_pool.size(1) - 1)
+        gather_idx = safe_sequences.unsqueeze(-1).expand(
+            -1, -1, self.model_params["embedding_dim"]
+        )
+        seq_embeddings = torch.gather(full_embedding_pool, dim=1, index=gather_idx)
         
         # 2. 交给 Decoder 利用上下文和 Encoder 特征处理整个序列
         logits = self.decoder.forward_sequence(seq_embeddings)
@@ -195,8 +225,10 @@ class Model(nn.Module):
         # 👑 核心修改：强行空投到“重灾区”起点
         # ==========================================
         # 不再瞎猜起点，而是直接使用传入的 starting_node 构建 batch 的初始输入
-        start_nodes = torch.full((batch_size,), starting_node, dtype=torch.long, device=device)
-        start_nodes = start_nodes.clamp(min=0, max=self.PAD_TOKEN)
+        safe_starting_node = self._sanitize_starting_node(starting_node)
+        start_nodes = torch.full(
+            (batch_size,), safe_starting_node, dtype=torch.long, device=device
+        )
         
         generated_sequences = [start_nodes.unsqueeze(1)]
         current_nodes = start_nodes
@@ -219,10 +251,18 @@ class Model(nn.Module):
         solution_neighbours = reset_state.neighbours.to(device)
 
         # 3. AR 自回归生成循环：严格交替的 删除(Delete) 与 插入(Insert) 阶段
+        full_embedding_pool = self._build_ar_embedding_pool()
+        max_token_idx = full_embedding_pool.size(1) - 1
+
         for step in range(max_steps - 1):
-            current_nodes = current_nodes.clamp(min=0, max=self.PAD_TOKEN)
-            # 将当前节点转为 Embedding
-            step_input = self.ar_embedding(current_nodes) # (batch, dim)
+            # 将当前节点从动态特征池中取 Embedding
+            current_nodes = current_nodes.clamp(min=0, max=max_token_idx)
+            gather_idx = current_nodes.unsqueeze(-1).unsqueeze(-1).expand(
+                -1, 1, self.model_params["embedding_dim"]
+            )
+            step_input = torch.gather(
+                full_embedding_pool, dim=1, index=gather_idx
+            ).squeeze(1)  # (batch, dim)
             
             # --- 单步 Decoder 前向过程 ---
             self.decoder.GRU_hidden = self.decoder.GRU(step_input, self.decoder.GRU_hidden)
@@ -332,6 +372,26 @@ class Model(nn.Module):
         # 拼接所有生成的节点 (包含了 starting_node 直到 END_TOKEN)
         final_sequences = torch.cat(generated_sequences, dim=1)
         return final_sequences
+
+    def _sanitize_starting_node(self, starting_node: int) -> int:
+        """Clamp invalid starting node index with explicit warning."""
+        try:
+            start_idx = int(starting_node)
+        except (TypeError, ValueError) as exc:
+            raise TypeError(
+                f"starting_node must be int-convertible, got {type(starting_node)!r}"
+            ) from exc
+
+        if start_idx < 0 or start_idx > self.PAD_TOKEN:
+            warnings.warn(
+                (
+                    f"starting_node={start_idx} is out of valid range [0, {self.PAD_TOKEN}]. "
+                    "It will be clamped."
+                ),
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        return max(0, min(start_idx, self.PAD_TOKEN))
 
     def _sample_from_probs(
         self, probs: torch.Tensor, state, batch_size: int, rollout_size: int
@@ -774,6 +834,7 @@ class CVRP_Decoder(nn.Module):
         self.sqrt_embedding_dim = model_params["sqrt_embedding_dim"]
         self.logit_clipping = model_params["logit_clipping"]
         self.z_dim = model_params["z_dim"] # 将 z_dim 保存为类属性
+        self.problem_size = model_params.get("problem_size", 100)
 
         # 兼容 forward / forward_sequence 的共享注意力投影
         self.Wq_last = nn.Linear(embedding_dim, head_num * qkv_dim, bias=False)
@@ -798,7 +859,7 @@ class CVRP_Decoder(nn.Module):
         self.GRU_hidden = None
         self.pad_mask = pad_mask # 【新增】保存掩码供打分时使用
         
-        # 原始 single_head_key: (batch, dim, problem_size + 1)
+        # 原始节点 Key（后续会对齐到固定全局槽位）: (batch, dim, local_nodes_with_depot)
         base_key = encoded_nodes.transpose(1, 2)
         batch_size = encoded_nodes.size(0)
 
@@ -806,8 +867,22 @@ class CVRP_Decoder(nn.Module):
         self.k = reshape_by_heads(self.Wk(encoded_nodes), self.head_num)
         self.v = reshape_by_heads(self.Wv(encoded_nodes), self.head_num)
         
-        # 将 END_TOKEN 扩展到当前 batch size，并拼接到原图节点后面
-        # 拼接后形状变为: (batch, dim, problem_size + 2)
+        # 将节点 Key 对齐到全局固定槽位 [Depot + problem_size customers]
+        fixed_node_slots = self.problem_size + 1
+        if base_key.size(2) < fixed_node_slots:
+            pad_len = fixed_node_slots - base_key.size(2)
+            key_pad = torch.zeros(
+                batch_size, base_key.size(1), pad_len, device=base_key.device
+            )
+            base_key = torch.cat([base_key, key_pad], dim=2)
+        elif base_key.size(2) > fixed_node_slots:
+            raise ValueError(
+                f"encoded node slots ({base_key.size(2)}) exceed configured problem size "
+                f"({fixed_node_slots - 1})."
+            )
+
+        # 将 END_TOKEN 扩展到当前 batch size，并拼接到节点后面
+        # 拼接后形状: (batch, dim, problem_size + 2)
         end_key_expanded = self.end_token_key.expand(batch_size, -1, -1)
         self.single_head_key = torch.cat([base_key, end_key_expanded], dim=2)
 
@@ -899,15 +974,24 @@ class CVRP_Decoder(nn.Module):
             scores = scores / self.sqrt_embedding_dim
             scores = self.logit_clipping * torch.tanh(scores)
             
-            # 【核心修复】：pad_mask 已经包含 Depot！
             if getattr(self, 'pad_mask', None) is not None:
                 batch_size = scores.size(0)
-                # 只需要额外给 END_TOKEN 拼一个 False (合法的结尾)
+                node_slots = scores.size(2) - 1  # 最后一个是 END_TOKEN
+                node_mask = torch.ones(
+                    batch_size, node_slots, dtype=torch.bool, device=scores.device
+                )
+                node_mask[:, 0] = False  # Depot 永远可用
+
+                # pad_mask 是客户维度（不含 Depot），长度等于当前 batch 的客户 padded 长度
+                customer_mask_len = max(0, min(self.pad_mask.size(1), node_slots - 1))
+                if customer_mask_len > 0:
+                    node_mask[:, 1 : 1 + customer_mask_len] = self.pad_mask[
+                        :, :customer_mask_len
+                    ]
+
+                # END_TOKEN 允许作为合法结束
                 end_mask = torch.zeros(batch_size, 1, dtype=torch.bool, device=scores.device)
-                
-                # 直接用 pad_mask 拼接 end_mask：[Depot, Customers..., END]
-                pointer_mask = torch.cat([self.pad_mask, end_mask], dim=1)
-                
+                pointer_mask = torch.cat([node_mask, end_mask], dim=1)
                 scores.masked_fill_(pointer_mask.unsqueeze(1), float('-inf'))
                 
             all_logits.append(scores)
