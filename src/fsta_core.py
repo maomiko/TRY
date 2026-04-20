@@ -15,6 +15,7 @@ WINDOWS_ACCESS_VIOLATION_U32 = 0xC0000005
 WINDOWS_STACK_BUFFER_OVERRUN_U32 = 0xC0000409
 MIN_MAX_CANDIDATES = 20
 MAX_CANDIDATES_BUFFER = 5
+LKH_DISTANCE_SCALE = 10000
 
 class FSTA_Compressor:
     """
@@ -476,7 +477,7 @@ class FSTA_Compressor:
             new_nodes.append(end)
             segment_endpoints.append((start, end))
 
-            total_seg_demand = int(np.sum(self.node_demand[np.asarray(seg, dtype=np.int64)]))
+            total_seg_demand = int(sum(int(self.node_demand[n]) for n in seg))
             start_demand, end_demand = self._split_segment_demand(total_seg_demand)
             endpoint_demand_override[start] = start_demand
             endpoint_demand_override[end] = end_demand
@@ -491,7 +492,7 @@ class FSTA_Compressor:
 
         node_coords = self.node_xy[np.asarray(new_nodes, dtype=np.int64)]
         distances = np.linalg.norm(node_coords[:, None, :] - node_coords[None, :, :], axis=2)
-        distances = np.asarray(np.rint(distances * 10000), dtype=np.int64)
+        distances = np.asarray(np.rint(distances * LKH_DISTANCE_SCALE), dtype=np.int64)
         np.fill_diagonal(distances, 0)
 
         demands = np.zeros(num_new_nodes, dtype=np.int64)
@@ -745,7 +746,7 @@ class FSTA_Compressor:
     def _write_par(self, par_path, vrp_path, out_path, vehicles=50, max_candidates=None):
         with open(par_path, 'w') as f:
             f.write(f"PROBLEM_FILE = {vrp_path}\nTOUR_FILE = {out_path}\n")
-            f.write(f"RUNS = 1\nTIME_LIMIT = {max(1, int(self.timeout_sec))}\nTRACE_LEVEL = 0\n")
+            f.write(f"RUNS = 1\nTIME_LIMIT = {self.timeout_sec}\nTRACE_LEVEL = 0\n")
             
             # 👑 突破“假车场黑洞”：视距必须穿透所有的假车场，再额外看到 5 个真实客户！
             cands = self._recommended_max_candidates(vehicles)
