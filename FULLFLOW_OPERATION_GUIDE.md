@@ -1,5 +1,7 @@
 # TRY 全流程操作文档（依赖安装 + 验证）
 
+> 快速导航：统一手册见 `OPERATION_MANUAL.md`；文件作用说明见 `FILE_ROLE_GUIDE.md`。
+
 ## 1. 环境与目录
 
 - 仓库目录：`/home/runner/work/TRY/TRY`

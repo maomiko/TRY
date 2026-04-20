@@ -4,6 +4,11 @@
 
 执行层面的依赖安装与全流程操作说明见：`FULLFLOW_OPERATION_GUIDE.md`
 
+统一操作手册与文件作用说明：
+
+- `OPERATION_MANUAL.md`
+- `FILE_ROLE_GUIDE.md`
+
 ## 1) 复现目标与成功标准
 
 本仓库复现目标定义为：
