@@ -194,8 +194,8 @@ class FSTA_Compressor:
 
     @staticmethod
     def _split_segment_demand(total_demand: int) -> Tuple[int, int]:
-        left = int(total_demand) // 2
-        right = int(total_demand) - left
+        left = total_demand // 2
+        right = total_demand - left
         return left, right
 
     @staticmethod
