@@ -1,5 +1,7 @@
 # TRY 全流程操作文档（依赖安装 + 验证）
 
+> 快速导航：统一手册见 `OPERATION_MANUAL.md`；文件作用说明见 `FILE_ROLE_GUIDE.md`。
+
 ## 1. 环境与目录
 
 - 仓库目录：`/home/runner/work/TRY/TRY`
@@ -32,6 +34,7 @@ PY
 ```bash
 python -m py_compile \
   /home/runner/work/TRY/TRY/eval.py \
+  /home/runner/work/TRY/TRY/generate_l2seg_training_data.py \
   /home/runner/work/TRY/TRY/train.py \
   /home/runner/work/TRY/TRY/repro_min_case.py \
   /home/runner/work/TRY/TRY/src/search_sa.py
@@ -76,7 +79,7 @@ PY
 ### 4.2 阶段 A：生成训练数据
 
 ```bash
-python /home/runner/work/TRY/TRY/eval.py --config /tmp/try-validation/label_smoke.yaml --seed 1234
+python /home/runner/work/TRY/TRY/generate_l2seg_training_data.py --config /tmp/try-validation/label_smoke.yaml --seed 1234
 ```
 
 ### 4.3 阶段 B：训练模型
@@ -106,7 +109,7 @@ python /home/runner/work/TRY/TRY/eval.py --config /tmp/try-validation/eval_ai_sm
 > 参数：`1000 cases × 25 iterations`，耗时显著高于 smoke。
 
 ```bash
-python /home/runner/work/TRY/TRY/eval.py --config /home/runner/work/TRY/TRY/configs/reproduce/label_gen_cvrp100.yaml --seed 1234
+python /home/runner/work/TRY/TRY/generate_l2seg_training_data.py --config /home/runner/work/TRY/TRY/configs/reproduce/label_gen_cvrp100.yaml --seed 1234
 python /home/runner/work/TRY/TRY/train.py --config /home/runner/work/TRY/TRY/configs/reproduce/train_cvrp100.yaml --seed 1234
 python /home/runner/work/TRY/TRY/eval.py --config /home/runner/work/TRY/TRY/configs/reproduce/eval_ai_cvrp100.yaml --seed 1234
 ```

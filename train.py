@@ -9,6 +9,7 @@ import argparse
 import random
 import numpy as np
 import csv
+import sys
 
 # 导入 25 维双脑模型
 from src.model import Model
@@ -137,6 +138,27 @@ def _read_trainer_params(config):
         "metrics_csv": trainer_params.get("metrics_csv", "results/l2seg_dataset/train_metrics.csv"),
     }
 
+
+def _validate_train_preflight(config_path, config, trainer_params):
+    missing_sections = [k for k in ("model_params", "env_params") if k not in config]
+    if missing_sections:
+        raise ValueError(f"配置缺少必需 section: {', '.join(missing_sections)}")
+    data_path = str(trainer_params["train_data_path"]).strip()
+    if not data_path:
+        raise ValueError("trainer_params.train_data_path 不能为空。")
+    if not os.path.exists(data_path):
+        raise FileNotFoundError(f"❌ 找不到训练数据: {data_path}")
+    if int(trainer_params["epochs"]) <= 0:
+        raise ValueError("trainer_params.epochs 必须大于 0。")
+    if int(trainer_params["batch_size"]) <= 0:
+        raise ValueError("trainer_params.batch_size 必须大于 0。")
+    if float(trainer_params["learning_rate"]) <= 0:
+        raise ValueError("trainer_params.learning_rate 必须大于 0。")
+    if float(trainer_params["grad_clip_norm"]) <= 0:
+        raise ValueError("trainer_params.grad_clip_norm 必须大于 0。")
+    if int(trainer_params["checkpoint_every"]) <= 0:
+        raise ValueError("trainer_params.checkpoint_every 必须大于 0。")
+
 # ==========================================
 # 3. 主训练逻辑
 # ==========================================
@@ -157,6 +179,7 @@ def train(config_path, seed=1234):
     model_params = config["model_params"]
     env_params = config["env_params"]
     trainer_params = _read_trainer_params(config)
+    _validate_train_preflight(config_path, config, trainer_params)
     
     # 自动计算或校对 sqrt_embedding_dim
     if "sqrt_embedding_dim" not in model_params:
@@ -356,4 +379,10 @@ if __name__ == "__main__":
     parser.add_argument('--config', type=str, default='configs/reproduce/train_cvrp100.yaml')
     parser.add_argument('--seed', type=int, default=1234)
     args = parser.parse_args()
-    train(args.config, seed=args.seed)
+    try:
+        train(args.config, seed=args.seed)
+    except Exception as e:
+        print(f"\n❌ 训练流程崩溃: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
