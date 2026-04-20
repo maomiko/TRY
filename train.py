@@ -140,8 +140,6 @@ def _read_trainer_params(config):
 
 
 def _validate_train_preflight(config_path, config, trainer_params):
-    if not os.path.exists(config_path):
-        raise FileNotFoundError(f"❌ 找不到配置文件: {config_path}")
     if "model_params" not in config or "env_params" not in config:
         raise ValueError("配置缺少 model_params 或 env_params。")
     data_path = str(trainer_params["train_data_path"]).strip()
