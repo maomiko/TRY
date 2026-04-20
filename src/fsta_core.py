@@ -164,6 +164,7 @@ class FSTA_Compressor:
         )
 
     def _normalize_tours(self, tours: List[List[int]]) -> List[List[int]]:
+        """Keep only valid customer IDs per route and drop empty routes."""
         max_customer_id = len(self.node_xy) - 1
         normalized = []
         for route in tours:
@@ -194,6 +195,7 @@ class FSTA_Compressor:
 
     @staticmethod
     def _split_segment_demand(total_demand: int) -> Tuple[int, int]:
+        """Split segment demand across dual hypernode endpoints (Appendix B.1.5 CVRP)."""
         left = total_demand // 2
         right = total_demand - left
         return left, right
