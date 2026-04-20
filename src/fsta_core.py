@@ -477,7 +477,7 @@ class FSTA_Compressor:
             new_nodes.append(end)
             segment_endpoints.append((start, end))
 
-            total_seg_demand = int(sum(int(self.node_demand[n]) for n in seg))
+            total_seg_demand = int(sum(self.node_demand[n] for n in seg))
             start_demand, end_demand = self._split_segment_demand(total_seg_demand)
             endpoint_demand_override[start] = start_demand
             endpoint_demand_override[end] = end_demand
