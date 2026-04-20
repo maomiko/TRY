@@ -13,13 +13,13 @@ def load_config(yaml_path):
     return config
 
 def main():
-    parser = argparse.ArgumentParser(description="L2Seg 25-Dim Evaluation & Data Collection Entry")
+    parser = argparse.ArgumentParser(description="L2Seg 25-Dim Pure Evaluation Entry")
     # 允许通过命令行指定配置文件
-    parser.add_argument('--config', type=str, default='configs/reproduce/label_gen_cvrp100.yaml', help='Path to yaml config file')
+    parser.add_argument('--config', type=str, default='configs/reproduce/eval_ai_cvrp100.yaml', help='Path to yaml config file')
     parser.add_argument('--seed', type=int, default=1234, help='Random seed for reproducibility')
     args = parser.parse_args()
 
-    print(f"🚀 [1/3] 加载驱动配置: {args.config}")
+    print(f"🚀 [1/3] 加载评测配置: {args.config}")
     if not os.path.exists(args.config):
         print(f"❌ 错误: 找不到配置文件 {args.config}")
         return
@@ -36,6 +36,9 @@ def main():
         torch.cuda.manual_seed_all(args.seed)
 
     tester_params.setdefault("seed", args.seed)
+    if tester_params.get("expert_data_mode", False):
+        print("⚠️ 检测到 expert_data_mode=true，eval.py 作为纯评测入口将强制关闭该模式。")
+        tester_params["expert_data_mode"] = False
 
     # ==========================================
     # 👑 动态防御逻辑 (同步 dry_run 的成功经验)
@@ -48,7 +51,7 @@ def main():
     # 我们把 model_params 整体塞进 env_params，确保 Search 类能一站式读到
     env_params["model_params"] = config.get("model_params", {})
 
-    print(f"⚙️ [2/3] 初始化 Search 引擎 (AI 模式: {not tester_params.get('use_baseline_destroy', True)})")
+    print(f"⚙️ [2/3] 初始化 Search 引擎（纯评测模式，AI 模式: {not tester_params.get('use_baseline_destroy', True)}）")
     
     try:
         # Search 类现在会根据 YAML 驱动决定是去加载 LKH 专家还是 AI 权重
@@ -59,11 +62,11 @@ def main():
         traceback.print_exc()
         return
 
-    print("🔥 [3/3] 开始正式运行...")
+    print("🔥 [3/3] 开始评测运行...")
     try:
         # 启动主循环，遍历数据集并记录 Cost/Runtime
         search.run()
-        print("\n🎉 运行结束！结果已保存至 results 文件夹。")
+        print("\n🎉 评测结束！结果已保存至 results 文件夹。")
     except Exception as e:
         print(f"\n❌ 运行时崩溃: {e}")
         import traceback
