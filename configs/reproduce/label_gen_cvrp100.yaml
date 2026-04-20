@@ -60,9 +60,9 @@ tester_params:
   max_runtime: 0
 
   softmax_temp: 1.0
-  lkh_path: "./LKH-3.exe"  # TODO: 替换为你本机可执行的 LKH-3.exe 路径（绝对或相对均可）
+  lkh_path: "./LKH-3"
 
   test_data_load:
     enable: true
     use_pkl_file: true
-    filename: "data/cvrp/vrp1000_test_seed1234.pkl"
+    filename: "data/cvrp/vrp100_test_seed1234.pkl"
