@@ -162,24 +162,40 @@ class FSTA_Compressor:
             "Checked paths: " + ", ".join(checked_candidates)
         )
 
+    def _normalize_tours(self, tours: List[List[int]]) -> List[List[int]]:
+        max_customer_id = len(self.node_xy) - 1
+        normalized = []
+        for route in tours:
+            clean_route = []
+            for node in route:
+                nid = int(node)
+                if 0 < nid <= max_customer_id:
+                    clean_route.append(nid)
+            if clean_route:
+                normalized.append(clean_route)
+        return normalized
+
     def _extract_segments(self, tours: List[List[int]], destroyed_nodes: Set[int]) -> List[List[int]]:
-        """
-        步骤 1：切割稳定段
-        如果一条路径上连续几个点没有被破坏，它们就构成一个 Segment。
-        """
         segments = []
         for tour in tours:
             current_segment = []
             for node in tour:
-                if node in destroyed_nodes:
-                    if len(current_segment) > 0:
+                nid = int(node)
+                if nid in destroyed_nodes:
+                    if current_segment:
                         segments.append(current_segment)
                         current_segment = []
-                else:
-                    current_segment.append(node)
-            if len(current_segment) > 0:
+                    continue
+                current_segment.append(nid)
+            if current_segment:
                 segments.append(current_segment)
         return segments
+
+    @staticmethod
+    def _split_segment_demand(total_demand: int) -> Tuple[int, int]:
+        left = int(total_demand) // 2
+        right = int(total_demand) - left
+        return left, right
 
     @staticmethod
     def _format_returncode_as_hex(returncode: int) -> str:
@@ -418,130 +434,107 @@ class FSTA_Compressor:
         return True
 
     def run_fsta_reoptimization(self, tours: List[List[int]], destroyed_nodes: Set[int]):
-        """
-        步骤 2 & 3：图压缩与 LKH 求解 (严密对齐 Appendix B.1.5)
-        """
         expected_customers = self._extract_expected_customers_from_tours(tours)
+        normalized_tours = self._normalize_tours(tours)
+        valid_customer_set = set(expected_customers)
 
-        def _fallback_tour(tours: List[List[int]]) -> List[int]:
+        def _fallback_tour(input_tours: List[List[int]]) -> List[int]:
             flat = []
-            max_customer_id = len(self.node_xy) - 1
-            for route in tours:
-                if not route:
-                    continue
-                flat.extend(
-                    int(n)
-                    for n in route
-                    if 0 < int(n) <= max_customer_id
-                )
-                flat.append(0)
-            if flat:
-                flat.pop()
+            seen = set()
+            for route in self._normalize_tours(input_tours):
+                for node in route:
+                    if node in seen:
+                        continue
+                    seen.add(node)
+                    flat.append(node)
             if not flat:
-                # 最终兜底：从期望客户集合重建一条可行扁平路线，绝不返回空解。
-                flat = [int(n) for n in expected_customers if 0 < int(n) <= max_customer_id]
+                flat = [int(n) for n in expected_customers if int(n) > 0]
             return flat
 
         if self._disable_lkh:
-            return _fallback_tour(tours)
+            return _fallback_tour(normalized_tours)
+        if not normalized_tours or not expected_customers:
+            return _fallback_tour(normalized_tours)
 
-        # 1. 提取所有 Segment
-        segments = self._extract_segments(tours, destroyed_nodes)
-        
-        # 2. 构建新图节点映射
-        # 新图包含: Depot(0) + 所有被破坏的点 + 所有 Segment 的首尾节点
-        new_nodes = [0] 
-        new_nodes.extend(list(destroyed_nodes))
-        
-        segment_endpoints = [] # 记录 (start, end)
+        destroyed = {int(n) for n in destroyed_nodes if int(n) in valid_customer_set}
+        segments = self._extract_segments(normalized_tours, destroyed)
+
+        new_nodes = [0]
+        segment_endpoints = []
+        endpoint_demand_override: Dict[int, int] = {}
+
+        for node in expected_customers:
+            if node in destroyed:
+                new_nodes.append(node)
+
         for seg in segments:
             if len(seg) == 1:
-                new_nodes.append(seg[0]) # 孤立的稳定点
-            else:
-                new_nodes.append(seg[0])   # 提取首节点
-                new_nodes.append(seg[-1])  # 提取尾节点
-                segment_endpoints.append((seg[0], seg[-1]))
+                new_nodes.append(seg[0])
+                continue
+            start, end = int(seg[0]), int(seg[-1])
+            new_nodes.append(start)
+            new_nodes.append(end)
+            segment_endpoints.append((start, end))
 
-        # 可能同时出现在 destroyed_nodes 和 segment endpoint，需去重避免图结构异常。
+            total_seg_demand = int(np.sum(self.node_demand[np.asarray(seg, dtype=np.int64)]))
+            start_demand, end_demand = self._split_segment_demand(total_seg_demand)
+            endpoint_demand_override[start] = start_demand
+            endpoint_demand_override[end] = end_demand
+
         new_nodes = self._deduplicate_preserve_order(new_nodes)
-                
-        # 建立 全局ID <-> 新图ID 的双向映射
-        # LKH 的索引要求从 1 开始
-        global_to_new = {g_id: n_id + 1 for n_id, g_id in enumerate(new_nodes)}
-        new_to_global = {n_id + 1: g_id for n_id, g_id in enumerate(new_nodes)}
         num_new_nodes = len(new_nodes)
         if num_new_nodes <= 1:
-            return _fallback_tour(tours)
+            return _fallback_tour(normalized_tours)
 
-        # 3. 构建 LKH 需要的显式距离矩阵和需求表 (核心魔法)
-        distances = np.zeros((num_new_nodes, num_new_nodes), dtype=int)
-        demands = np.zeros(num_new_nodes, dtype=int)
-        
-        # 计算新需求 (Demand Aggregation)
+        global_to_new = {g_id: n_id + 1 for n_id, g_id in enumerate(new_nodes)}
+        new_to_global = {n_id + 1: g_id for n_id, g_id in enumerate(new_nodes)}
+
+        node_coords = self.node_xy[np.asarray(new_nodes, dtype=np.int64)]
+        distances = np.linalg.norm(node_coords[:, None, :] - node_coords[None, :, :], axis=2)
+        distances = np.asarray(np.rint(distances * 10000), dtype=np.int64)
+        np.fill_diagonal(distances, 0)
+
+        demands = np.zeros(num_new_nodes, dtype=np.int64)
         for i, g_id in enumerate(new_nodes):
-            n_id = i + 1
-            # 找到这个点属于哪个 segment
-            belong_seg = next((s for s in segments if g_id in [s[0], s[-1]] and len(s) > 1), None)
-            if belong_seg:
-                # 【论文对齐】：需求平分 (d_start = d_end = sum / 2)
-                total_seg_demand = sum(self.node_demand[n] for n in belong_seg)
-                demands[i] = total_seg_demand // 2
+            if g_id == 0:
+                demands[i] = 0
+                continue
+            if g_id in endpoint_demand_override:
+                demands[i] = int(endpoint_demand_override[g_id])
             else:
-                demands[i] = self.node_demand[g_id]
+                demands[i] = int(self.node_demand[g_id])
 
-        # 计算新距离矩阵 (Distance Aggregation)
-        # 先全部算真实的欧式距离 (乘以10000转整数以适应LKH)
-        for i in range(num_new_nodes):
-            for j in range(num_new_nodes):
-                g_i, g_j = new_nodes[i], new_nodes[j]
-                dist = np.linalg.norm(self.node_xy[g_i] - self.node_xy[g_j])
-                distances[i, j] = int(dist * 10000)
-
-        # 【论文对齐】：将双超节点内部的距离强行置为 0
         fixed_edges_lkh = []
         for start_g, end_g in segment_endpoints:
+            if start_g not in global_to_new or end_g not in global_to_new:
+                continue
             s_n, e_n = global_to_new[start_g], global_to_new[end_g]
             distances[s_n - 1, e_n - 1] = 0
             distances[e_n - 1, s_n - 1] = 0
-            fixed_edges_lkh.append((s_n, e_n)) # 强制锁死
+            fixed_edges_lkh.append((s_n, e_n))
 
         repaired = self._sanitize_reduced_instance(distances, demands, fixed_edges_lkh)
         if repaired is None:
-            return _fallback_tour(tours)
+            return _fallback_tour(normalized_tours)
         distances, demands = repaired
 
-
-        # ==========================================
-        # 👑 新增：防止过度压缩导致的“载货量悖论”
-        # ==========================================
-        total_demand = sum(demands)
+        total_demand = int(np.sum(demands))
         if self.capacity <= 0:
-            return _fallback_tour(tours)
+            return _fallback_tour(normalized_tours)
         min_required_vehicles = max(1, int(np.ceil(total_demand / self.capacity)))
-        
         if num_new_nodes - 1 < min_required_vehicles:
-            # 如果节点被压缩得比必须派出的车辆数还少，这是物理无解的。直接放弃本次退火！
-            return _fallback_tour(tours)
+            return _fallback_tour(normalized_tours)
 
-        # 4. 写入临时目录并调用 LKH-3 (多进程安全版)
         temp_dir = "/dev/shm" if os.path.exists("/dev/shm") else tempfile.gettempdir()
-        
-        # 👑 核心改造 1：为这一次执行生成一个绝不重复的 32 位随机 ID
         run_id = uuid.uuid4().hex
-        
         vrp_path = os.path.join(temp_dir, f"fsta_problem_{run_id}.vrp")
         par_path = os.path.join(temp_dir, f"fsta_params_{run_id}.par")
         out_path = os.path.join(temp_dir, f"fsta_output_{run_id}.tour")
 
-        try:
-            # 👑 完美动态车辆分配：既满足最低运力，又不超过节点数和最大限制
-            max_feasible_vehicles = max(1, num_new_nodes - 1)
-            safe_vehicles = max(min_required_vehicles, min(self.max_vehicles, max_feasible_vehicles))
-            assert safe_vehicles <= max_feasible_vehicles, (
-                f"safe_vehicles ({safe_vehicles}) exceeded "
-                f"max_feasible_vehicles ({max_feasible_vehicles})"
-            )
+        max_feasible_vehicles = max(1, num_new_nodes - 1)
+        safe_vehicles = max(min_required_vehicles, min(self.max_vehicles, max_feasible_vehicles))
 
+        try:
             if not self._validate_lkh_inputs(
                 n=num_new_nodes,
                 distances=distances,
@@ -551,7 +544,7 @@ class FSTA_Compressor:
                 capacity=self.capacity,
             ):
                 self._trace_print("[LKH trace] invalid reduced instance detected before LKH call; fallback applied.")
-                return _fallback_tour(tours)
+                return _fallback_tour(normalized_tours)
 
             self._write_explicit_vrp(vrp_path, num_new_nodes, distances, demands, fixed_edges_lkh)
             base_max_candidates = self._recommended_max_candidates(safe_vehicles)
@@ -589,10 +582,6 @@ class FSTA_Compressor:
                     ):
                         retry_max_candidates = max_feasible_vehicles
                         if retry_max_candidates > base_max_candidates:
-                            self._trace_print(
-                                "[LKH trace] no-candidates detected, retry once with "
-                                f"MAX_CANDIDATES={retry_max_candidates}"
-                            )
                             self._write_par(
                                 par_path,
                                 vrp_path,
@@ -601,9 +590,7 @@ class FSTA_Compressor:
                                 max_candidates=retry_max_candidates,
                             )
                             process_result = self._run_lkh_once(par_path)
-                            if process_result.returncode == 0:
-                                self._trace_print("[LKH trace] retry succeeded with expanded MAX_CANDIDATES.")
-                            else:
+                            if process_result.returncode != 0:
                                 self._log_process_result(process_result)
 
                     if process_result.returncode != 0:
@@ -613,10 +600,6 @@ class FSTA_Compressor:
                             max_feasible_vehicles=max_feasible_vehicles,
                         )
                         if retry_vehicles > safe_vehicles:
-                            self._trace_print(
-                                f"[LKH trace] data/parameter-like failure detected, retry once with "
-                                f"relaxed VEHICLES={retry_vehicles}"
-                            )
                             self._write_par(
                                 par_path,
                                 vrp_path,
@@ -625,12 +608,9 @@ class FSTA_Compressor:
                                 max_candidates=self._recommended_max_candidates(retry_vehicles),
                             )
                             process_result = self._run_lkh_once(par_path)
-                            if process_result.returncode == 0:
-                                self._trace_print("[LKH trace] retry succeeded with relaxed VEHICLES.")
-                            else:
+                            if process_result.returncode != 0:
                                 self._log_process_result(process_result)
 
-            # 👑 核心防御：如果 LKH 底层崩溃，绝对不能交白卷！必须触发平滑回退
             if process_result.returncode != 0:
                 final_classification = self._classify_failure(
                     process_result.returncode,
@@ -638,87 +618,24 @@ class FSTA_Compressor:
                     process_result.stderr or "",
                 )
                 if final_classification == "lkh_process_crash":
-                    self._trace_print(
-                        "[LKH trace] detected native crash; disable LKH and use fallback repair for "
-                        "subsequent iterations."
-                    )
                     self._disable_lkh = True
-                return _fallback_tour(tours)
+                return _fallback_tour(normalized_tours)
 
-            # 5. 读取与无损解码
             lkh_tour_new = self._parse_tour(out_path)
             if not lkh_tour_new:
-                self._trace_print("[LKH trace] empty/invalid TOUR_FILE content; fallback applied.")
                 self._disable_lkh = True
-                return _fallback_tour(tours)
+                return _fallback_tour(normalized_tours)
 
             recovered = self._recover_solution(lkh_tour_new, new_to_global, segments)
             if not self._is_valid_flat_tour(recovered, expected_customers):
-                self._trace_print("[LKH trace] recovered tour failed validation; fallback applied.")
-                return _fallback_tour(tours)
+                return _fallback_tour(normalized_tours)
 
             return recovered
-
-        except subprocess.TimeoutExpired as e:
-            self._trace_print("\n" + "!"*60)
-            self._trace_print("LKH-3 陷入死循环，已被 Python 强制狙击！")
-            self._trace_print("让我们看看它死前到底卡在哪一步了：")
-            self._trace_print(f"{e.stdout}")
-            self._trace_print(f"顺便检查一下容量参数对不对：Capacity = {self.capacity}")
-            self._trace_print("!"*60 + "\n")
-            # 超时后单次救援重试：放宽 VEHICLES / MAX_CANDIDATES，并给更长超时窗口。
-            try:
-                available_locals = locals()
-                if all(
-                    name in available_locals for name in
-                    ("par_path", "vrp_path", "out_path", "safe_vehicles", "min_required_vehicles", "max_feasible_vehicles")
-                ):
-                    retry_vehicles = self._calculate_retry_vehicles(
-                        safe_vehicles=safe_vehicles,
-                        min_required_vehicles=min_required_vehicles,
-                        max_feasible_vehicles=max_feasible_vehicles,
-                    )
-                    retry_max_candidates = max(
-                        max_feasible_vehicles,
-                        self._recommended_max_candidates(retry_vehicles),
-                    )
-                    self._trace_print(
-                        "[LKH trace] timeout rescue retry with "
-                        f"VEHICLES={retry_vehicles}, MAX_CANDIDATES={retry_max_candidates}"
-                    )
-                    self._write_par(
-                        par_path,
-                        vrp_path,
-                        out_path,
-                        vehicles=retry_vehicles,
-                        max_candidates=retry_max_candidates,
-                    )
-                    retry_timeout = max(self.timeout_sec * 2, self.timeout_sec + 30)
-                    retry_result = self._run_lkh_once(par_path, timeout_sec=retry_timeout)
-                    if retry_result.returncode == 0:
-                        retry_tour = self._parse_tour(out_path)
-                        if retry_tour:
-                            retry_recovered = self._recover_solution(retry_tour, new_to_global, segments)
-                            if self._is_valid_flat_tour(retry_recovered, expected_customers):
-                                self._trace_print("[LKH trace] timeout rescue retry succeeded.")
-                                return retry_recovered
-                    else:
-                        self._log_process_result(retry_result)
-            except subprocess.TimeoutExpired:
-                self._trace_print("[LKH trace] timeout rescue retry also timed out; fallback applied.")
-            except Exception as retry_err:
-                self._trace_print(f"[LKH trace] timeout rescue retry failed: {retry_err}")
-            return _fallback_tour(tours)
-        except (FileNotFoundError, PermissionError, OSError) as e:
-            self._trace_print("\n" + "="*60)
-            self._trace_print("💀 LKH-3 不可执行或缺失，已成功拦截，正在平滑回退。")
-            self._trace_print(f"👉 错误原因: {e}")
-            self._trace_print(f"👉 当前 LKH 路径: {self.lkh_path}")
-            self._trace_print("="*60 + "\n")
-            return _fallback_tour(tours)
-            
+        except subprocess.TimeoutExpired:
+            return _fallback_tour(normalized_tours)
+        except (FileNotFoundError, PermissionError, OSError):
+            return _fallback_tour(normalized_tours)
         finally:
-            # 👑 核心改造 2：无论成功还是报错，必须自动毁尸灭迹，防止硬盘撑爆！
             for f_path in [vrp_path, par_path, out_path]:
                 if os.path.exists(f_path):
                     try:
@@ -727,74 +644,58 @@ class FSTA_Compressor:
                         pass
 
     def _recover_solution(self, lkh_tour_new: List[int], new_to_global: Dict[int, int], segments: List[List[int]]) -> List[int]:
-        """
-        步骤 4：解映射 (Solution Recovery)
-        将超节点重新展开为完整的物理节点段，并彻底清洗 LKH 产生的假车场。
-        """
-        # 转回全局 ID（未映射节点一律视为车场分隔符，避免假车场误映射到真实客户）
-        global_tour = []
-        for n in lkh_tour_new:
-            nid = int(n)
-            if nid == 1:
-                global_tour.append(0)
+        raw_global = []
+        for reduced_id in lkh_tour_new:
+            rid = int(reduced_id)
+            if rid == 1:
+                raw_global.append(0)
                 continue
-
-            if nid in new_to_global:
-                val = new_to_global[nid]
+            if rid in new_to_global:
+                raw_global.append(int(new_to_global[rid]))
             else:
-                global_tour.append(0)
-                continue
+                raw_global.append(0)
 
-            if isinstance(val, list):
-                global_tour.extend(val)
-            else:
-                global_tour.append(val)
-        
-        # 建立 Segment 的首尾快速查找字典
-        seg_dict = {}
+        seg_lookup: Dict[Tuple[int, int], List[int]] = {}
         for seg in segments:
             if len(seg) > 1:
-                seg_dict[(seg[0], seg[-1])] = seg
-                seg_dict[(seg[-1], seg[0])] = list(reversed(seg))
+                seg_lookup[(int(seg[0]), int(seg[-1]))] = [int(x) for x in seg]
+                seg_lookup[(int(seg[-1]), int(seg[0]))] = [int(x) for x in reversed(seg)]
 
-        current_tour = []
+        expanded = []
         i = 0
-        while i < len(global_tour):
-            curr_node = global_tour[i]
-            # 检查是否遇到了双超节点
-            if i < len(global_tour) - 1:
-                next_node = global_tour[i+1]
-                pair = (curr_node, next_node)
-                if pair in seg_dict:
-                    # 展开折叠的超节点！
-                    current_tour.extend(seg_dict[pair])
+        while i < len(raw_global):
+            curr = int(raw_global[i])
+            if curr == 0:
+                if expanded and expanded[-1] != 0:
+                    expanded.append(0)
+                i += 1
+                continue
+
+            if i + 1 < len(raw_global):
+                nxt = int(raw_global[i + 1])
+                pair = (curr, nxt)
+                if pair in seg_lookup:
+                    expanded.extend(seg_lookup[pair])
                     i += 2
                     continue
-            
-            current_tour.append(curr_node)
+
+            expanded.append(curr)
             i += 1
-            
-        # =======================================================
-        # 👑 终极清洗机：将 LKH 产生的假车场统一转换为标准分隔符 0
-        # =======================================================
+
         num_customers = len(self.node_xy) - 1
-        clean_1d_tour = []
-        for node in current_tour:
-            if node > num_customers or node == 0:
-                # 遇到真假车场（例如 132），统一视为路线分割，插入一个 0
-                # 必须保证不连续插入 0，防止空路线
-                if len(clean_1d_tour) > 0 and clean_1d_tour[-1] != 0:
-                    clean_1d_tour.append(0)
-            else:
-                clean_1d_tour.append(node)
-                
-        # 掐头去尾，去掉首尾可能多余的 0
-        while len(clean_1d_tour) > 0 and clean_1d_tour[0] == 0:
-            clean_1d_tour.pop(0)
-        while len(clean_1d_tour) > 0 and clean_1d_tour[-1] == 0:
-            clean_1d_tour.pop()
-            
-        return clean_1d_tour
+        cleaned = []
+        for node in expanded:
+            nid = int(node)
+            if 0 < nid <= num_customers:
+                cleaned.append(nid)
+            elif cleaned and cleaned[-1] != 0:
+                cleaned.append(0)
+
+        while cleaned and cleaned[0] == 0:
+            cleaned.pop(0)
+        while cleaned and cleaned[-1] == 0:
+            cleaned.pop()
+        return cleaned
     
     def _write_explicit_vrp(self, path, n, distances, demands, fixed_edges):
         """写入显式全连接矩阵 TSPLIB"""
@@ -844,7 +745,7 @@ class FSTA_Compressor:
     def _write_par(self, par_path, vrp_path, out_path, vehicles=50, max_candidates=None):
         with open(par_path, 'w') as f:
             f.write(f"PROBLEM_FILE = {vrp_path}\nTOUR_FILE = {out_path}\n")
-            f.write("RUNS = 1\nTIME_LIMIT = 10\nTRACE_LEVEL = 0\n")
+            f.write(f"RUNS = 1\nTIME_LIMIT = {max(1, int(self.timeout_sec))}\nTRACE_LEVEL = 0\n")
             
             # 👑 突破“假车场黑洞”：视距必须穿透所有的假车场，再额外看到 5 个真实客户！
             cands = self._recommended_max_candidates(vehicles)
