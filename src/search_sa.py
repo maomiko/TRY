@@ -26,7 +26,7 @@ from .logging_utils import (
     AverageMeter,
 )
 from .seed_sampler import SeedVectorSampler
-from .label_generator import L2SegLabelGenerator
+from .expert_dataset_collector import ExpertDatasetCollector
 
 from .fsta_core import FSTA_Compressor
 
@@ -139,11 +139,13 @@ class Search:
         self.destroy_operators = self._load_destroy_operators()
 
     
-        # 初始化 L2Seg 标签生成器
-        self.label_generator = L2SegLabelGenerator(self.env_params["problem_size"])
-        
-        # 创建一个列表用于在内存中暂存生成的训练数据
-        self.training_data_buffer = []
+        # 专家标签数据集收集器（独立于求解流程）
+        self.dataset_collector = ExpertDatasetCollector(
+            env_params=self.env_params,
+            tester_params=self.tester_params,
+            result_folder=self.result_folder,
+            logger=self.logger,
+        )
 
         self.test_dataset = None
         self.test_dataset_size = None
@@ -400,37 +402,7 @@ class Search:
 
     def _save_training_labels(self):
         """将收集到的 L2Seg 标签保存为 PyTorch 数据文件"""
-        if not self.training_data_buffer:
-            self.logger.info("未收集到任何有效的标签数据。")
-            return
-
-        save_path = self.tester_params.get(
-            "l2s_data_save_path",
-            os.path.join(self.result_folder, "l2seg_training_data.pt"),
-        )
-        save_path = os.path.abspath(os.path.expandvars(os.path.expanduser(save_path)))
-
-        test_data_cfg = self.tester_params.get("test_data_load", {})
-        test_data_path = test_data_cfg.get("filename") if test_data_cfg.get("enable", False) else None
-        if test_data_path:
-            test_data_path = os.path.abspath(os.path.expandvars(os.path.expanduser(test_data_path)))
-            same_path = os.path.normcase(os.path.normpath(save_path)) == os.path.normcase(os.path.normpath(test_data_path))
-            if same_path:
-                base, ext = os.path.splitext(save_path)
-                ext = ext if ext else ".pt"
-                redirected_path = f"{base}.generated{ext}"
-                self.logger.warning(
-                    "l2s_data_save_path 与 test_data_load.filename 指向同一路径，"
-                    "为避免覆盖测试数据，训练标签将保存到: %s",
-                    redirected_path,
-                )
-                save_path = redirected_path
-
-        save_dir = os.path.dirname(save_path)
-        if save_dir:
-            os.makedirs(save_dir, exist_ok=True)
-        torch.save(self.training_data_buffer, save_path)
-        self.logger.info(f"成功保存 {len(self.training_data_buffer)} 条训练数据至 {save_path}")
+        self.dataset_collector.save()
 
     def _load_test_dataset(self) -> None:
         cfg = self.tester_params.get("test_data_load", {})
@@ -710,9 +682,9 @@ class Search:
                 )
 
             # 论文 Algorithm 2 风格：R <- R+，不使用 SA 接受/降温逻辑
-            samples_before = len(self.training_data_buffer)
+            samples_before = self.dataset_collector.sample_count
             new_solutions = self._perform_iteration(aug_factor, rollout_size, local_rng)
-            samples_after = len(self.training_data_buffer)
+            samples_after = self.dataset_collector.sample_count
             newly_generated = samples_after - samples_before
             self.my_python_solutions = new_solutions
 
@@ -739,21 +711,6 @@ class Search:
             "solution": incumbent_solution,
         }
 
-    def _should_accept_expert_label(self, improvement: float, rng: random.Random) -> bool:
-        """Algorithm 2 gating: improvement threshold η_improv + stochastic acceptance α_AC."""
-        min_improvement = float(self.tester_params.get("eta_improv", 0.0))
-        if improvement < min_improvement:
-            return False
-
-        alpha_ac = float(self.tester_params.get("alpha_ac", 0.0))
-        # 论文 D.3 中，small-capacity（如 CVRP/VRPTW 小容量设定）常配 α_AC=0。
-        # Implementation: alpha_ac <= 0 means no extra random downsampling;
-        # all labels passing eta_improv are retained.
-        if alpha_ac <= 0.0:
-            return True
-        alpha_ac = min(alpha_ac, 1.0)
-        return rng.random() <= alpha_ac
-
     def _collect_expert_training_labels(
         self,
         tours_before: List[List[int]],
@@ -762,65 +719,13 @@ class Search:
         state_snapshot: Dict[str, torch.Tensor],
         rng: random.Random,
     ) -> None:
-        improvement = float(current_cost - new_solution.totalCosts)
-        if improvement <= 0:
-            return
-
-        subproblem_labels = self.label_generator.generate_labels(tours_before, new_solution.getTourList())
-        for sub_label in subproblem_labels:
-            if not self._should_accept_expert_label(improvement, rng):
-                continue
-
-            involved_nodes = sub_label["involved_nodes"]
-            raw_nar_labels = sub_label.get("nar_labels", [])
-            if len(involved_nodes) == 0:
-                continue
-
-            customer_nodes = []
-            problem_size = int(self.env_params["problem_size"])
-            for x in involved_nodes:
-                x_int = int(x)
-                if 0 < x_int <= problem_size:
-                    customer_nodes.append(x_int)
-            if len(customer_nodes) == 0:
-                continue
-
-            # Rebuild NAR labels in local node space: [depot, customer_1..customer_k].
-            # This avoids length mismatch when involved_nodes contains out-of-range IDs.
-            node_to_nar = {
-                int(node_id): int(label)
-                for node_id, label in zip(involved_nodes, raw_nar_labels)
-            }
-            nar_labels_local = [node_to_nar.get(0, 0)] + [node_to_nar.get(x, 0) for x in customer_nodes]
-
-            # customer ID is 1..N; feature tensors are 0..N-1.
-            idx_tensor = torch.tensor([x - 1 for x in customer_nodes], dtype=torch.long)
-
-            g2l_map = {g_id: l_idx + 1 for l_idx, g_id in enumerate(customer_nodes)}
-            g2l_map[0] = 0
-
-            raw_neighbours = state_snapshot["neighbours"][idx_tensor].tolist()
-            local_neighbours = []
-            for left, right in raw_neighbours:
-                local_neighbours.append([g2l_map.get(left, 0), g2l_map.get(right, 0)])
-            local_neighbours_tensor = torch.tensor(local_neighbours, dtype=torch.long)
-
-            local_state_dict = {
-                "depot_xy": state_snapshot["depot_xy"],
-                "node_xy": state_snapshot["node_xy"][idx_tensor],
-                "node_demand": state_snapshot["node_demand"][idx_tensor],
-                "tour_index": state_snapshot["tour_index"][idx_tensor],
-                "neighbours": local_neighbours_tensor,
-                "global_node_indices": customer_nodes,
-            }
-
-            self.training_data_buffer.append(
-                {
-                    "nar_labels": nar_labels_local,
-                    "ar_sequences": sub_label["ar_sequence"],
-                    "state_dict": local_state_dict,
-                }
-            )
+        self.dataset_collector.collect_from_transition(
+            tours_before=tours_before,
+            current_cost=current_cost,
+            new_solution=new_solution,
+            state_snapshot=state_snapshot,
+            rng=rng,
+        )
 
     def _perform_iteration(
         self, aug_factor: int, rollout_size: int, rng: random.Random

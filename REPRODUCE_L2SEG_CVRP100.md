@@ -51,10 +51,10 @@
 ### 阶段 A：专家模式生成监督数据
 
 ```bash
-python eval.py --config configs/reproduce/label_gen_cvrp100.yaml --seed 1234
+python generate_l2seg_training_data.py --config configs/reproduce/label_gen_cvrp100.yaml --seed 1234
 ```
 
-说明：`eval.py` 默认配置已对齐为 `configs/reproduce/label_gen_cvrp100.yaml`。
+说明：建议使用独立入口 `generate_l2seg_training_data.py` 进行训练集生成。
 当前配置启用了 `tester_params.expert_data_mode=true`，会走**独立专家数据生成流程**（按论文 Algorithm 2 的 `R -> R+` 更新，不再依赖 SA 的 Metropolis 接受逻辑）。
 
 LKH 说明（Linux/macOS）：
