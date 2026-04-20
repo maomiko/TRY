@@ -140,8 +140,9 @@ def _read_trainer_params(config):
 
 
 def _validate_train_preflight(config_path, config, trainer_params):
-    if "model_params" not in config or "env_params" not in config:
-        raise ValueError("配置缺少 model_params 或 env_params。")
+    missing_sections = [k for k in ("model_params", "env_params") if k not in config]
+    if missing_sections:
+        raise ValueError(f"配置缺少必需 section: {', '.join(missing_sections)}")
     data_path = str(trainer_params["train_data_path"]).strip()
     if not data_path:
         raise ValueError("trainer_params.train_data_path 不能为空。")
