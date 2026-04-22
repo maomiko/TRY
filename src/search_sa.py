@@ -526,7 +526,8 @@ class Search:
         current_load = 0.0
 
         for node in customers:
-            demand = float(node_demand[node - 1]) if len(node_demand) >= node else 0.0
+            demand_idx = node - 1
+            demand = float(node_demand[demand_idx]) if 0 <= demand_idx < len(node_demand) else 0.0
             if current_route and (cap > 0) and (current_load + demand > cap + 1e-9):
                 tours.append(current_route)
                 current_route = []
@@ -995,7 +996,7 @@ class Search:
             # 提取候选节点的真实二维坐标用于空间聚类
             all_coords = reset_state.problem_feat.node_xy.squeeze(0).cpu().numpy()
             # unstable_candidates 为全局客户 ID（1..N），node_xy 为客户数组（0..N-1），需减 1 映射。
-            candidate_customer_idx = unstable_candidates - 1
+            candidate_customer_idx = (unstable_candidates - 1).long()
             candidate_coords = all_coords[candidate_customer_idx.cpu().numpy()]
             
             # 防止候选点数量比预设的 K 还少
@@ -1004,7 +1005,7 @@ class Search:
             cluster_labels = kmeans.fit_predict(candidate_coords)
             
             initial_nodes = []
-            candidate_probs = customer_probs[(unstable_candidates - 1).long()].cpu().numpy()
+            candidate_probs = customer_probs[candidate_customer_idx].cpu().numpy()
             
             # 遍历每个簇，寻找 NAR 概率最高的那个节点作为 AR 的起点
             for k in range(actual_k):
