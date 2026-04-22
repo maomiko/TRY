@@ -944,7 +944,10 @@ class Search:
         # 论文推荐超参数（支持通过 tester_params 覆盖）
         eta = float(self.tester_params.get("nar_threshold", 0.6))
         n_kmeans = int(self.tester_params.get("n_kmeans", 3))
-        destroy_budget = max(1, int(self.env_params.get("num_nodes_to_remove", 15)))
+        operator_budget = operator.get("num_nodes_to_remove")
+        if operator_budget is None:
+            operator_budget = self.env_params.get("num_nodes_to_remove", 15)
+        destroy_budget = max(1, int(operator_budget))
         
         with torch.no_grad():
 
@@ -1039,11 +1042,14 @@ class Search:
                 if len(final_destroyed_nodes) >= destroy_budget:
                     break
 
-            # AR 为空时，回退到 NAR Top-K（与预算对齐）。
-            if len(final_destroyed_nodes) == 0:
+            # AR 为空或不足预算时，使用 NAR 排序补齐预算（保持模型驱动）。
+            if len(final_destroyed_nodes) < destroy_budget:
                 ranked = torch.argsort(customer_probs, descending=True)
                 for idx in ranked.tolist():
                     node_id = idx + 1
+                    if node_id in seen_nodes:
+                        continue
+                    seen_nodes.add(node_id)
                     final_destroyed_nodes.append(node_id)
                     if len(final_destroyed_nodes) >= destroy_budget:
                         break
