@@ -510,6 +510,34 @@ class Search:
             cursor += route_len
         return rebuilt
 
+    def _build_cold_start_tours(
+        self,
+        num_customers: int,
+        node_demand: np.ndarray,
+        capacity: float,
+        rng: random.Random,
+    ) -> List[List[int]]:
+        customers = list(range(1, num_customers + 1))
+        rng.shuffle(customers)
+
+        cap = float(capacity)
+        tours: List[List[int]] = []
+        current_route: List[int] = []
+        current_load = 0.0
+
+        for node in customers:
+            demand = float(node_demand[node - 1]) if len(node_demand) >= node else 0.0
+            if current_route and (cap > 0) and (current_load + demand > cap + 1e-9):
+                tours.append(current_route)
+                current_route = []
+                current_load = 0.0
+            current_route.append(node)
+            current_load += demand
+
+        if current_route:
+            tours.append(current_route)
+        return tours if tours else [customers]
+
     def _route_cost(self, route: List[int]) -> float:
         if not route:
             return 0.0
@@ -637,24 +665,41 @@ class Search:
             self.nn_node_xy[0:1], self.nn_node_xy[1:], self.nn_node_demand, torch.device("cpu")
         )
 
-        # ==========================================
-        # [纯 Python 重构] 4. Bootstrapping：让 LKH-3 生成初始解
-        # ==========================================
-        # 我们不再依赖 C++ 给初始解，而是构造一个包含所有客户的列表，
-        # 直接让 LKH-3 全局跑一次，给出一个极好的起点！
-        naive_tour = [list(range(1, num_customers + 1))] 
-        all_nodes_set = set(range(1, num_customers + 1))
-        
-        if instance_idx == 0:
-            self.logger.info("正在为所有图生成 LKH 初始解")
-        initial_flat_tour = self.fsta_compressor.run_fsta_reoptimization(naive_tour, all_nodes_set)
+        seed_input = f"{self.seed}:{int(instance_idx)}".encode("utf-8")
+        local_seed = int(hashlib.sha256(seed_input).hexdigest()[:16], 16)
+        local_rng = random.Random(local_seed)
 
-        init_tours = self._decode_and_validate_tours(initial_flat_tour, num_customers)
-        if init_tours is None:
-            self.logger.warning(
-                "LKH initial tour invalid/empty; falling back to naive tour for this instance."
+        # ==========================================
+        # [纯 Python 重构] 4. Bootstrapping：可配置冷启动策略
+        # ==========================================
+        use_lkh_bootstrap = bool(
+            self.tester_params.get(
+                "bootstrap_with_lkh",
+                self.tester_params.get("expert_data_mode", False),
             )
-            init_tours = copy.deepcopy(naive_tour)
+        )
+        if use_lkh_bootstrap:
+            naive_tour = [list(range(1, num_customers + 1))]
+            all_nodes_set = set(range(1, num_customers + 1))
+            if instance_idx == 0:
+                self.logger.info("正在为所有图生成 LKH 初始解")
+            initial_flat_tour = self.fsta_compressor.run_fsta_reoptimization(naive_tour, all_nodes_set)
+
+            init_tours = self._decode_and_validate_tours(initial_flat_tour, num_customers)
+            if init_tours is None:
+                self.logger.warning(
+                    "LKH initial tour invalid/empty; falling back to naive tour for this instance."
+                )
+                init_tours = copy.deepcopy(naive_tour)
+        else:
+            if instance_idx == 0:
+                self.logger.info("bootstrap_with_lkh=False，使用随机容量可行冷启动以便评测模型改进能力。")
+            init_tours = self._build_cold_start_tours(
+                num_customers=num_customers,
+                node_demand=raw_n_dem,
+                capacity=float(raw_capacity),
+                rng=local_rng,
+            )
         
         # 将这个极好的初始解复制 aug_factor 份
         base_solution = PurePythonSolution(init_tours, self.full_node_xy)
@@ -670,9 +715,6 @@ class Search:
         incumbent_solution = copy.deepcopy(base_solution)
 
         # Iterative search loop
-        seed_input = f"{self.seed}:{int(instance_idx)}".encode("utf-8")
-        local_seed = int(hashlib.sha256(seed_input).hexdigest()[:16], 16)
-        local_rng = random.Random(local_seed)
         iteration = 0
         while iteration < max_iterations:
 
