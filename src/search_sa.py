@@ -137,6 +137,7 @@ class Search:
         
         # Load trained models for learned destroy operations
         self.destroy_operators = self._load_destroy_operators()
+        self._destroy_operator_cursor = 0
 
     
         # 专家标签数据集收集器（独立于求解流程）
@@ -289,6 +290,14 @@ class Search:
                 "No valid AI destroy operator loaded; evaluation will fall back to baseline destroy."
             )
         return operators
+
+    def _next_destroy_operator(self) -> Dict[str, Any]:
+        """Pick destroy operator in round-robin order for stable multi-model usage."""
+        if len(self.destroy_operators) == 0:
+            raise RuntimeError("No destroy operators loaded.")
+        idx = self._destroy_operator_cursor % len(self.destroy_operators)
+        self._destroy_operator_cursor += 1
+        return self.destroy_operators[idx]
 
     def _resolve_checkpoint_path(self, model_config: Dict[str, Any]) -> Optional[str]:
         """Resolve checkpoint path from config, with safe fallbacks."""
@@ -935,7 +944,7 @@ class Search:
         L2Seg-SYN 协同推理逻辑：NAR 全局圈定 -> KMeans 聚类 -> AR 局部深挖
         严格复刻论文 Algorithm 3
         """
-        operator = random.choice(self.destroy_operators)
+        operator = self._next_destroy_operator()
         model = operator["model"]
 
         
