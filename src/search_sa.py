@@ -943,6 +943,7 @@ class Search:
         # 论文推荐超参数（支持通过 tester_params 覆盖）
         eta = float(self.tester_params.get("nar_threshold", 0.6))
         n_kmeans = int(self.tester_params.get("n_kmeans", 3))
+        destroy_budget = max(1, int(self.env_params.get("num_nodes_to_remove", 15)))
         
         with torch.no_grad():
 
@@ -964,23 +965,36 @@ class Search:
             model.pre_forward(reset_state)
             nar_logits = model.nar_forward()
             
-            # 获取每个节点被判定为不稳定的概率 (假设提取单图概率)
-            nar_probs = torch.sigmoid(nar_logits).squeeze(0) 
-            nar_probs[0] = -1e9 # 永远不破坏车场 (Depot)
-            
-            # 找出所有大于等于阈值 η 的候选节点
-            unstable_candidates = torch.where(nar_probs >= eta)[0]
-            
-            # 如果当前图极其稳定，直接返回空列表
-            if len(unstable_candidates) == 0:
-                # 返回 aug_factor 份空列表，以对齐外层循环
-                return [[] for _ in range(aug_factor)]
-                
+            # 获取每个节点被判定为不稳定的概率，并统一映射到全局客户 ID（1..N）。
+            raw_probs = torch.sigmoid(nar_logits).reshape(-1)
+            num_customers = int(reset_state.problem_feat.node_xy.size(1))
+            if raw_probs.numel() == num_customers + 1:
+                # 模型输出含 depot，跳过索引 0。
+                customer_probs = raw_probs[1:]
+            else:
+                # 模型输出仅含客户。
+                customer_probs = raw_probs[:num_customers]
+
+            node_ids = torch.arange(
+                1, customer_probs.numel() + 1, device=customer_probs.device, dtype=torch.long
+            )
+
+            # 找出所有大于等于阈值 η 的候选客户点
+            unstable_mask = customer_probs >= eta
+            unstable_candidates = node_ids[unstable_mask]
+
+            # 若阈值过严导致无候选，则回退到 NAR Top-K（保证评测仍由模型驱动）。
+            if unstable_candidates.numel() == 0:
+                top_k = min(destroy_budget, customer_probs.numel())
+                if top_k <= 0:
+                    return [[] for _ in range(aug_factor)]
+                _, top_idx = torch.topk(customer_probs, k=top_k)
+                unstable_candidates = node_ids[top_idx]
+                 
             # 阶段二：KMeans 聚类与寻找引爆点 (Clustering & Initial Node Identification)
             # 提取候选节点的真实二维坐标用于空间聚类
             all_coords = reset_state.problem_feat.node_xy.squeeze(0).cpu().numpy()
-            # unstable_candidates 来自 nar_probs：0 表示 depot，1..N 表示客户。
-            # node_xy 是纯客户坐标数组，索引范围为 0..N-1，因此需减 1 做映射。
+            # unstable_candidates 为全局客户 ID（1..N），node_xy 为客户数组（0..N-1），需减 1 映射。
             candidate_customer_idx = unstable_candidates - 1
             candidate_coords = all_coords[candidate_customer_idx.cpu().numpy()]
             
@@ -990,7 +1004,7 @@ class Search:
             cluster_labels = kmeans.fit_predict(candidate_coords)
             
             initial_nodes = []
-            candidate_probs = nar_probs[unstable_candidates].cpu().numpy()
+            candidate_probs = customer_probs[(unstable_candidates - 1).long()].cpu().numpy()
             
             # 遍历每个簇，寻找 NAR 概率最高的那个节点作为 AR 的起点
             for k in range(actual_k):
@@ -1000,7 +1014,8 @@ class Search:
                 initial_nodes.append(global_idx)
                 
             # 阶段三：AR 局部精准爆破 (Local Unstable Edge Detection via AR)
-            final_destroyed_nodes = set()
+            final_destroyed_nodes: List[int] = []
+            seen_nodes = set()
             end_token_idx = model.vocab_size - 1
             
             for init_node in initial_nodes:
@@ -1014,8 +1029,23 @@ class Search:
                 for node in seq_np:
                     if node == end_token_idx:
                         break
-                    if node != 0:
-                        final_destroyed_nodes.add(node)
+                    node_int = int(node)
+                    if 0 < node_int <= num_customers and node_int not in seen_nodes:
+                        seen_nodes.add(node_int)
+                        final_destroyed_nodes.append(node_int)
+                        if len(final_destroyed_nodes) >= destroy_budget:
+                            break
+                if len(final_destroyed_nodes) >= destroy_budget:
+                    break
+
+            # AR 为空时，回退到 NAR Top-K（与预算对齐）。
+            if len(final_destroyed_nodes) == 0:
+                ranked = torch.argsort(customer_probs, descending=True)
+                for idx in ranked.tolist():
+                    node_id = idx + 1
+                    final_destroyed_nodes.append(node_id)
+                    if len(final_destroyed_nodes) >= destroy_budget:
+                        break
 
         # 把最终确定的不稳定节点列表，复制 aug_factor 份返回
         # 这样能无缝对齐你 _perform_sa_iteration 中 selected_nodes = all_selected_nodes[aug_idx] 的格式
