@@ -98,6 +98,16 @@ class Model(nn.Module):
         # ==========================================
         static_feats = reset_state.l2seg_static_feats.to(device)     # 8维
         dynamic_feats = reset_state.l2seg_dynamic_feats.to(device)   # 14维
+        if static_feats.size(-1) != 8 or dynamic_feats.size(-1) != 14:
+            raise ValueError(
+                "L2Seg feature dimension mismatch: expected static=8 and dynamic=14, "
+                f"got static={static_feats.size(-1)}, dynamic={dynamic_feats.size(-1)}"
+            )
+        if static_feats.size(1) != node_xy.size(1) or dynamic_feats.size(1) != node_xy.size(1):
+            raise ValueError(
+                "L2Seg feature node-count mismatch with node_xy: "
+                f"node_xy={node_xy.size(1)}, static={static_feats.size(1)}, dynamic={dynamic_feats.size(1)}"
+            )
         
         # 3 + 8 + 14 = 25 维！彻底完成 Node Features 升级
         node_feat = torch.cat((base_feat, static_feats, dynamic_feats), dim=2)
@@ -110,6 +120,12 @@ class Model(nn.Module):
         elif self.problem == "pcvrp":
             node_prizes = reset_state.problem_feat.node_prizes.to(device)
             node_feat = torch.cat((node_feat, node_prizes[:, :, None]), dim=2)
+        expected_feat_dim = {"cvrp": 25, "vrptw": 28, "pcvrp": 26}[self.problem]
+        if node_feat.size(-1) != expected_feat_dim:
+            raise ValueError(
+                f"node_feat dim mismatch for {self.problem}: "
+                f"expected {expected_feat_dim}, got {node_feat.size(-1)}"
+            )
 
         # Solution structure
         solution_neighbours = reset_state.neighbours.to(device)
@@ -982,10 +998,16 @@ class CVRP_Decoder(nn.Module):
                 )
                 node_mask[:, 0] = False  # Depot 永远可用
 
-                # pad_mask 是客户维度（不含 Depot），长度等于当前 batch 的客户 padded 长度
-                customer_mask_len = max(0, min(self.pad_mask.size(1), node_slots - 1))
+                if self.pad_mask.size(1) != node_slots:
+                    raise ValueError(
+                        f"Decoder pad_mask length mismatch: got {self.pad_mask.size(1)}, "
+                        f"expected {node_slots} ([depot + customers])."
+                    )
+
+                pad_mask_customers = self.pad_mask[:, 1:]
+                customer_mask_len = max(0, min(pad_mask_customers.size(1), node_slots - 1))
                 if customer_mask_len > 0:
-                    node_mask[:, 1 : 1 + customer_mask_len] = self.pad_mask[
+                    node_mask[:, 1 : 1 + customer_mask_len] = pad_mask_customers[
                         :, :customer_mask_len
                     ]
 

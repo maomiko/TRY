@@ -2,18 +2,14 @@
 
 import os
 import time
-import warnings
 from logging import getLogger
 from typing import Tuple, Dict, Any
 from functools import partial
-
-from torch.nn.utils.rnn import pad_sequence
 
 import numpy as np
 import torch
 from torch.optim import Adam as Optimizer
 from torch.optim.lr_scheduler import MultiStepLR as Scheduler
-import torch
 from torch.utils.data import Dataset, DataLoader
 
 
@@ -28,7 +24,6 @@ from .logging_utils import (
 from .seed_sampler import SeedVectorSampler
 import wandb
 
-from torch.utils.data import Dataset, DataLoader
 from torch.nn.utils.rnn import pad_sequence
 
 # --- 新增：用于伪装环境对象的类 ---
@@ -62,10 +57,60 @@ def l2s_collate_fn(batch, global_end_token: int, pad_token: int):
     has_prizes = 'node_prizes' in batch[0]['state_dict']
 
 
-    unknown_ar_tokens = set()
-
     for item in batch:
+        required_item_keys = {"nar_labels", "ar_sequences", "state_dict"}
+        missing_item_keys = required_item_keys - set(item.keys())
+        if missing_item_keys:
+            raise KeyError(f"Sample missing keys: {sorted(missing_item_keys)}")
+
+        required_state_keys = {
+            "depot_xy",
+            "node_xy",
+            "node_demand",
+            "tour_index",
+            "neighbours",
+            "global_node_indices",
+        }
+        missing_state_keys = required_state_keys - set(item["state_dict"].keys())
+        if missing_state_keys:
+            raise KeyError(f"state_dict missing keys: {sorted(missing_state_keys)}")
+        if ('node_tw' in item['state_dict']) != has_tw:
+            raise ValueError("Inconsistent node_tw presence across samples in the same batch.")
+        if ('node_prizes' in item['state_dict']) != has_prizes:
+            raise ValueError("Inconsistent node_prizes presence across samples in the same batch.")
+
         global_indices = item['state_dict']['global_node_indices']
+        customer_count = len(global_indices)
+        depot_xy = item['state_dict']['depot_xy']
+        node_xy = item['state_dict']['node_xy']
+        node_demand = item['state_dict']['node_demand']
+        tour_index = item['state_dict']['tour_index']
+        neighbours = item['state_dict']['neighbours']
+
+        if depot_xy.dim() != 1 or depot_xy.size(0) != 2:
+            raise ValueError(f"depot_xy must be shape (2,), got {tuple(depot_xy.shape)}")
+        if node_xy.dim() != 2 or node_xy.size(1) != 2:
+            raise ValueError(f"node_xy must be shape (N,2), got {tuple(node_xy.shape)}")
+        if node_demand.dim() != 1:
+            raise ValueError(f"node_demand must be shape (N,), got {tuple(node_demand.shape)}")
+        if tour_index.dim() != 1:
+            raise ValueError(f"tour_index must be shape (N,), got {tuple(tour_index.shape)}")
+        if neighbours.dim() != 2 or neighbours.size(1) != 2:
+            raise ValueError(f"neighbours must be shape (N,2), got {tuple(neighbours.shape)}")
+
+        if len(item["nar_labels"]) != customer_count + 1:
+            raise ValueError(
+                "nar_labels length mismatch: expected depot + customers, "
+                f"got {len(item['nar_labels'])} vs expected {customer_count + 1}"
+            )
+        if node_xy.size(0) != customer_count:
+            raise ValueError("node_xy length mismatch with global_node_indices.")
+        if node_demand.size(0) != customer_count:
+            raise ValueError("node_demand length mismatch with global_node_indices.")
+        if tour_index.size(0) != customer_count:
+            raise ValueError("tour_index length mismatch with global_node_indices.")
+        if neighbours.size(0) != customer_count:
+            raise ValueError("neighbours length mismatch with global_node_indices.")
 
         # 在前向传播时，Depot 永远会被 concat 在最前面（索引 0）
         # 所以客户的局部索引必须从 1 开始顺延
@@ -81,36 +126,32 @@ def l2s_collate_fn(batch, global_end_token: int, pad_token: int):
                 # 合法结束符，保留全局固定索引
                 local_ar_seq.append(int(global_end_token))
             else:
-                # 异常 token 回退为 END，同时显式告警，避免静默吞错
-                unknown_ar_tokens.add(g_id)
-                local_ar_seq.append(int(global_end_token))
+                raise ValueError(
+                    "Unknown AR token id detected; refusing to auto-remap to END. "
+                    f"token={g_id}, known_global_nodes={sorted(g2l_map.keys())[:8]}..."
+                )
                     
         ar_seqs_list.append(torch.tensor(local_ar_seq, dtype=torch.long))
         
         # 将其他特征转为 Tensor
         nar_labels_list.append(torch.tensor(item['nar_labels'], dtype=torch.float32))
-        node_xy_list.append(item['state_dict']['node_xy'])
-        node_demand_list.append(item['state_dict']['node_demand'])
-        tour_index_list.append(item['state_dict']['tour_index'])
-        neighbours_list.append(item['state_dict']['neighbours'])  
+        node_xy_list.append(node_xy)
+        node_demand_list.append(node_demand)
+        tour_index_list.append(tour_index)
+        neighbours_list.append(neighbours)  
     
         # 【新增】：抽取拓展特征
         if has_tw:
-            node_tw_list.append(item['state_dict']['node_tw'])
+            node_tw = item['state_dict']['node_tw']
+            if node_tw.dim() != 2 or node_tw.size(0) != customer_count or node_tw.size(1) != 2:
+                raise ValueError(f"node_tw must be shape (N,2), got {tuple(node_tw.shape)}")
+            node_tw_list.append(node_tw)
         if has_prizes:
-            node_prizes_list.append(item['state_dict']['node_prizes'])
+            node_prizes = item['state_dict']['node_prizes']
+            if node_prizes.dim() != 1 or node_prizes.size(0) != customer_count:
+                raise ValueError(f"node_prizes must be shape (N,), got {tuple(node_prizes.shape)}")
+            node_prizes_list.append(node_prizes)
     
-    if unknown_ar_tokens:
-        preview = sorted(unknown_ar_tokens)[:8]
-        warnings.warn(
-            (
-                "Unknown AR token IDs detected in batch and remapped to END token. "
-                f"count={len(unknown_ar_tokens)}, preview={preview}, end_token={int(global_end_token)}"
-            ),
-            RuntimeWarning,
-            stacklevel=2,
-        )
-
     # ==========================================
     # 2. 动态 Padding (补齐长短不一的 Tensor)
     # ==========================================
@@ -128,9 +169,16 @@ def l2s_collate_fn(batch, global_end_token: int, pad_token: int):
     # 3. 生成注意力掩码 (Attention Mask)
     # ==========================================
     # True 表示是 Pad 出来的假节点，False 表示是真实节点
-    pad_mask = torch.zeros((len(batch), max_nodes), dtype=torch.bool)
+    # nar_pad_mask 对齐 NAR 标签维度（含 depot）
+    nar_pad_mask = torch.zeros((len(batch), max_nodes), dtype=torch.bool)
     for i, seq in enumerate(nar_labels_list):
-        pad_mask[i, len(seq):] = True
+        nar_pad_mask[i, len(seq):] = True
+
+    # customer_pad_mask 仅覆盖客户节点维度（不含 depot），用于 22 维特征计算
+    max_customers = max(x.size(0) for x in node_xy_list)
+    customer_pad_mask = torch.zeros((len(batch), max_customers), dtype=torch.bool)
+    for i, node_xy in enumerate(node_xy_list):
+        customer_pad_mask[i, node_xy.size(0):] = True
 
     # 4. 还原 ResetState 对象结构
     reset_state = DummyResetState()
@@ -145,7 +193,7 @@ def l2s_collate_fn(batch, global_end_token: int, pad_token: int):
     reset_state.tour_index = tour_index_padded
     
     # 新增属性：把 pad_mask 传下去，一会 model.py 里的 Encoder 会用到它！
-    reset_state.pad_mask = pad_mask 
+    reset_state.pad_mask = nar_pad_mask 
 
     # 用 0 (Depot) 补齐假节点的邻居
     neighbours_padded = pad_sequence(neighbours_list, batch_first=True, padding_value=0)
@@ -168,7 +216,7 @@ def l2s_collate_fn(batch, global_end_token: int, pad_token: int):
         reset_state.problem_feat.node_demand,
         reset_state.tour_index,
         reset_state.neighbours,
-        pad_mask=reset_state.pad_mask
+        pad_mask=customer_pad_mask
     )
     
     reset_state.l2seg_static_feats = static_feats
@@ -179,6 +227,7 @@ def l2s_collate_fn(batch, global_end_token: int, pad_token: int):
 
     return {
         'nar_labels': nar_labels_padded,
+        'nar_pad_mask': nar_pad_mask,
         'ar_sequences': ar_sequences_padded,
         'reset_state': reset_state,
         'pad_token': int(pad_token)  # 传给 Loss 函数，用于忽略 Padding 部分
@@ -467,6 +516,7 @@ class Trainer:
         # 注意：你需要将环境状态打包成 reset_state 字典或对象传入
         reset_state = batch["reset_state"] 
         nar_labels_target = batch["nar_labels"].to(self.device)  # shape: (batch_size, problem_size + 1)
+        nar_pad_mask = batch["nar_pad_mask"].to(self.device)
         ar_sequences = batch["ar_sequences"].to(self.device)    # shape: (batch_size, max_seq_len)
         pad_token = batch["pad_token"]  # <--- 新增这行，接住传过来的 pad_token
 
@@ -484,7 +534,7 @@ class Trainer:
 
             # 4. 计算 L2Seg 的多任务损失
             loss, loss_nar, loss_ar = self._compute_l2seg_loss(
-                nar_logits, nar_labels_target, 
+                nar_logits, nar_labels_target, nar_pad_mask,
                 ar_logits, ar_sequences,
                 pad_token  # <--- 新增传参
             )
@@ -497,7 +547,8 @@ class Trainer:
         with torch.no_grad():
             # 使用 Sigmoid 将 logits 转为概率，> 0.5 视为预测分类 1
             nar_preds = (torch.sigmoid(nar_logits) > 0.5).float()
-            nar_accuracy = (nar_preds == nar_labels_target).float().mean()
+            nar_valid_mask = ~nar_pad_mask
+            nar_accuracy = ((nar_preds == nar_labels_target) & nar_valid_mask).float().sum() / nar_valid_mask.float().sum().clamp_min(1.0)
 
         return nar_accuracy.item(), loss.item(), loss_nar.item(), loss_ar.item()
     
@@ -524,6 +575,7 @@ class Trainer:
             for batch in self.val_dataloader:
                 reset_state = batch["reset_state"] 
                 nar_labels_target = batch["nar_labels"].to(self.device)  
+                nar_pad_mask = batch["nar_pad_mask"].to(self.device)
                 ar_sequences = batch["ar_sequences"].to(self.device)    
                 pad_token = batch["pad_token"]
                 
@@ -533,12 +585,13 @@ class Trainer:
                     ar_logits = self.model.ar_forward(ar_sequences)
                     
                     loss, loss_nar, loss_ar = self._compute_l2seg_loss(
-                        nar_logits, nar_labels_target, ar_logits, ar_sequences, pad_token
+                        nar_logits, nar_labels_target, nar_pad_mask, ar_logits, ar_sequences, pad_token
                     )
                     
                 # 计算 NAR 准确率
                 nar_preds = (torch.sigmoid(nar_logits) > 0.5).float()
-                nar_accuracy = (nar_preds == nar_labels_target).float().mean()
+                nar_valid_mask = ~nar_pad_mask
+                nar_accuracy = ((nar_preds == nar_labels_target) & nar_valid_mask).float().sum() / nar_valid_mask.float().sum().clamp_min(1.0)
                 
                 # 更新指标
                 batch_size = nar_labels_target.size(0)
@@ -574,6 +627,7 @@ class Trainer:
         self, 
         nar_logits: torch.Tensor, 
         nar_labels: torch.Tensor, 
+        nar_pad_mask: torch.Tensor,
         ar_logits: torch.Tensor, 
         ar_sequences: torch.Tensor,
         pad_token: int  # <--- 新增参数
@@ -589,7 +643,11 @@ class Trainer:
         # 1. NAR 分支损失 (Non-Autoregressive)
         # ==========================================
         # 直接使用带有 Logits 的 BCE，数值计算更稳定
-        loss_nar = F.binary_cross_entropy_with_logits(nar_logits, nar_labels.float())
+        nar_loss_per_token = F.binary_cross_entropy_with_logits(
+            nar_logits, nar_labels.float(), reduction="none"
+        )
+        nar_valid_mask = (~nar_pad_mask).float()
+        loss_nar = (nar_loss_per_token * nar_valid_mask).sum() / nar_valid_mask.sum().clamp_min(1.0)
 
         # ==========================================
         # 2. AR 分支损失 (Autoregressive)
